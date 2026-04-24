@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-project = "mvx-common"
+project = "mvx-lib"
 author = "Vladimir Makarov"
 
 extensions = [
