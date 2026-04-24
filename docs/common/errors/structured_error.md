@@ -235,8 +235,8 @@ For example:
 
 ```text
 StructuredError
-└── ReasonedError
-    └── InvalidFunctionArgumentError
+├── ReasonedError
+└── InvalidFunctionArgumentError
 ```
 
 `StructuredError` gives the common structure. Subclasses define the specific
