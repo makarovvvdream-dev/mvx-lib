@@ -35,3 +35,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Local IDE/tool configs
+mypy_ide.ini
