@@ -19,3 +19,6 @@ html_theme_options = {
 
 autodoc_typehints = "description"
 autodoc_member_order = "bysource"
+
+html_static_path = ["_static"]
+html_logo = "_static/logo.png"
