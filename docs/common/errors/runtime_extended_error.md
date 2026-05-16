@@ -1,5 +1,8 @@
 # RuntimeExtendedError
-
+```{contents} Contents:
+:depth: 4
+:local:
+```
 `RuntimeExtendedError` is a structured variant of Python's `RuntimeError`.
 
 It is used for runtime failures that should preserve normal `RuntimeError`

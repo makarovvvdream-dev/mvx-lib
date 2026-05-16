@@ -1,5 +1,8 @@
 # RuntimeUnexpectedError
-
+```{contents} Contents:
+:depth: 4
+:local:
+```
 `RuntimeUnexpectedError` is a marker base class for runtime errors classified as
 unexpected.
 

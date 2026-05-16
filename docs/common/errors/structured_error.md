@@ -1,5 +1,8 @@
 # StructuredError
-
+```{contents} Contents:
+:depth: 4
+:local:
+```
 `StructuredError` is the base exception class for MVX errors that need to carry
 structured diagnostic context.
 

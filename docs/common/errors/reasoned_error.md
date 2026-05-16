@@ -1,4 +1,8 @@
 # ReasonedError
+```{contents} Contents:
+:depth: 4
+:local:
+```
 
 `ReasonedError` is a `StructuredError` subclass that adds a stable reason code.
 

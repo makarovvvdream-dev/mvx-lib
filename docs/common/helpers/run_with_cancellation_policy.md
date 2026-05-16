@@ -1,5 +1,8 @@
 # run_with_cancellation_policy
-
+```{contents} Contents:
+:depth: 4
+:local:
+```
 `run_with_cancellation_policy` runs one async operation under an explicit
 cancellation policy.
 

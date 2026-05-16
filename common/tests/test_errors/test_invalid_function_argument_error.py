@@ -26,7 +26,7 @@ def test_a1_basic_payload_and_types() -> None:
     assert isinstance(err, InvalidFunctionArgumentError)
 
     # Message must be based on the underlying cause.
-    assert err.message == "invalid argument: offset must be >= 0"
+    assert err.message == "invalid argument -> offset must be >= 0"
 
     # Details must include func, arg, error_type, value and merged extras.
     expected_keys = {"func", "arg", "error_type", "value", "ctx"}
@@ -245,5 +245,5 @@ def test_d1_str_contains_class_message_and_details() -> None:
     s = str(err)
 
     assert "InvalidFunctionArgumentError" in s
-    assert "invalid argument: offset must be >= 0" in s
+    assert "invalid argument -> offset must be >= 0" in s
     assert "details=" in s

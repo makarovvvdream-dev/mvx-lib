@@ -16,9 +16,10 @@ html_theme_options = {
     "collapse_navigation": False,
     "navigation_depth": 4,
 }
+html_css_files = ["custom.css"]
 
 autodoc_typehints = "description"
 autodoc_member_order = "bysource"
 
 html_static_path = ["_static"]
-html_logo = "_static/logo.png"
+html_logo = "_static/MariVeX.png"

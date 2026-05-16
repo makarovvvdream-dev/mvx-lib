@@ -1,5 +1,8 @@
 # api_error_processor
-
+```{contents} Contents:
+:depth: 4
+:local:
+```
 `api_error_processor` builds a decorator for public API exception normalization.
 
 It is used at public boundaries of library components, where raw internal

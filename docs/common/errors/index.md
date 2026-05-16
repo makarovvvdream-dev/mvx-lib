@@ -17,6 +17,7 @@ Exception
 
 ```{toctree}
 :maxdepth: 1
+:hidden:
 
 structured_error
 reasoned_error
