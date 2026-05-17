@@ -21,6 +21,8 @@ These settings include:
 * `log_adapter_resolver` — the resolver for custom serialization adapters;
 * `log_error_handling_policy` — the policy for handling errors raised by logging itself.
 
+The event policy works with event metadata: namespace, event name, entity id, and optional source location. It does not inspect payload, event type, level, or timestamp.
+
 Usually, settings are provided when the context is created:
 
 ```python

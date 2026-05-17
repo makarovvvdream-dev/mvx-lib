@@ -8,7 +8,7 @@ import logging
 
 import pytest
 
-from mvx.common.logger.models import LogEvent
+from mvx.common.logger.models import LogEvent, LogEventMeta
 
 from mvx.common.logger.adapter_logging.log_record_factory import (
     make_log_record_from_event,
@@ -20,27 +20,29 @@ from mvx.common.logger.adapter_logging.log_record_factory import (
 def make_event(
     *,
     level: int = logging.INFO,
-    event_namespace: str = "mvx.ldap",
+    event_namespace: str | None = "mvx.ldap",
     event_name: str = "bind.success",
-    event_type: str = "operation",
+    event_type: str | None = "operation",
     timestamp: float = 1_700_000_000.123,
-    entity_id: str = "conn-1",
+    entity_id: str | None = "conn-1",
     payload: Mapping[str, Any] | None = None,
-    source_path: str = "/tmp/source.py",
-    source_line: int = 42,
-    source_func: str = "run_operation",
+    source_path: str | None = "/tmp/source.py",
+    source_line: int | None = 42,
+    source_func: str | None = "run_operation",
 ) -> LogEvent:
     return LogEvent(
         level=level,
-        event_namespace=event_namespace,
-        event_name=event_name,
+        meta=LogEventMeta(
+            event_namespace=event_namespace,
+            event_name=event_name,
+            entity_id=entity_id,
+            source_path=source_path,
+            source_line=source_line,
+            source_func=source_func,
+        ),
         event_type=event_type,
         timestamp=timestamp,
-        entity_id=entity_id,
         payload=payload if payload is not None else {"result": "ok"},
-        source_path=source_path,
-        source_line=source_line,
-        source_func=source_func,
     )
 
 
@@ -116,6 +118,30 @@ def test_a08_record_stack_info_is_none() -> None:
     assert record.stack_info is None
 
 
+def test_a09_record_pathname_uses_not_defined_when_source_path_missing() -> None:
+    event = make_event(source_path=None)
+
+    record = make_log_record_from_event("mvx.test.logger", event)
+
+    assert record.pathname == "<not defined>"
+
+
+def test_a10_record_lineno_uses_minus_one_when_source_line_missing() -> None:
+    event = make_event(source_line=None)
+
+    record = make_log_record_from_event("mvx.test.logger", event)
+
+    assert record.lineno == -1
+
+
+def test_a11_record_func_name_uses_not_defined_when_source_func_missing() -> None:
+    event = make_event(source_func=None)
+
+    record = make_log_record_from_event("mvx.test.logger", event)
+
+    assert record.funcName == "<not defined>"
+
+
 # ---- B. Message construction -------------------------------------------------------------
 
 
@@ -159,6 +185,52 @@ def test_b05_message_uses_event_namespace_not_logger_name() -> None:
 
     assert record.name == "logger.name"
     assert record.msg.startswith("event.ns.")
+
+
+def test_b06_message_omits_entity_id_when_missing() -> None:
+    event = make_event(entity_id=None)
+
+    record = make_log_record_from_event("mvx.test.logger", event)
+
+    assert record.msg == "mvx.ldap.bind.success [operation]"
+
+
+def test_b07_message_omits_event_type_when_missing() -> None:
+    event = make_event(event_type=None)
+
+    record = make_log_record_from_event("mvx.test.logger", event)
+
+    assert record.msg == "mvx.ldap.conn-1.bind.success"
+
+
+def test_b08_message_omits_namespace_when_missing() -> None:
+    event = make_event(event_namespace=None)
+
+    record = make_log_record_from_event("mvx.test.logger", event)
+
+    assert record.msg == "conn-1.bind.success [operation]"
+
+
+def test_b09_message_contains_only_event_name_when_namespace_and_entity_id_are_missing() -> None:
+    event = make_event(
+        event_namespace=None,
+        entity_id=None,
+    )
+
+    record = make_log_record_from_event("mvx.test.logger", event)
+
+    assert record.msg == "bind.success [operation]"
+
+
+def test_b10_message_omits_namespace_and_event_type_when_both_are_missing() -> None:
+    event = make_event(
+        event_namespace=None,
+        event_type=None,
+    )
+
+    record = make_log_record_from_event("mvx.test.logger", event)
+
+    assert record.msg == "conn-1.bind.success"
 
 
 # ---- C. Timestamp mapping ----------------------------------------------------------------
@@ -264,6 +336,30 @@ def test_d06_record_payload_accepts_custom_mapping() -> None:
 
     assert record_payload == {"x": 1}
     assert isinstance(record_payload, dict)
+
+
+def test_d07_record_namespace_custom_field_uses_not_defined_when_missing() -> None:
+    event = make_event(event_namespace=None)
+
+    record = make_log_record_from_event("mvx.test.logger", event)
+
+    assert get_record_extra(record, "event_namespace") == "<not defined>"
+
+
+def test_d08_record_event_type_custom_field_uses_not_defined_when_missing() -> None:
+    event = make_event(event_type=None)
+
+    record = make_log_record_from_event("mvx.test.logger", event)
+
+    assert get_record_extra(record, "event_type") == "<not defined>"
+
+
+def test_d09_record_entity_id_custom_field_uses_not_defined_when_missing() -> None:
+    event = make_event(entity_id=None)
+
+    record = make_log_record_from_event("mvx.test.logger", event)
+
+    assert get_record_extra(record, "entity_id") == "<not defined>"
 
 
 # ---- E. Formatter compatibility ----------------------------------------------------------

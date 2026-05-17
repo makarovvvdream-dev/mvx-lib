@@ -10,8 +10,9 @@ import re
 import asyncio
 import inspect
 from functools import wraps
+import time
 
-from ..models import LogLevel
+from ..models import LogLevel, LogEventMeta, LogEvent
 from .protocols import LogContextProto, LogContextProviderProto, LogEntityIdProviderProto
 
 __all__ = ("log_invocation",)
@@ -524,8 +525,8 @@ def log_invocation(
 
         def _emit_invoke(
             effective_ctx: LogContextProto,
+            event_meta: LogEventMeta,
             effective_kwargs: dict[str, Any],
-            entity_id: str | None,
         ) -> None:
             invoke_data: dict[str, Any] = {}
 
@@ -559,19 +560,21 @@ def log_invocation(
                 if kwargs_payload:
                     invoke_data["kwargs"] = kwargs_payload
 
-            effective_ctx.log_event(
-                event,
-                invoke_level,
-                invoke_data,
-                event_type=_InvocationEventType.INVOKE.value,
-                entity_id=entity_id,
+            effective_ctx.emit_log_event(
+                LogEvent(
+                    level=invoke_level,
+                    meta=event_meta,
+                    event_type=_InvocationEventType.INVOKE.value,
+                    timestamp=time.time(),
+                    payload=invoke_data,
+                )
             )
 
         def _emit_cancelled(
             effective_ctx: LogContextProto,
+            event_meta: LogEventMeta,
             effective_kwargs: dict[str, Any],
             err: BaseException,
-            entity_id: str | None,
         ) -> None:
 
             if effective_ctx.is_error_logged(err):
@@ -592,21 +595,23 @@ def log_invocation(
                 target_payload=payload,
             )
 
-            effective_ctx.log_event(
-                event,
-                cancel_level,
-                payload,
-                event_type=_InvocationEventType.CANCELLED.value,
-                entity_id=entity_id,
+            effective_ctx.emit_log_event(
+                LogEvent(
+                    level=cancel_level,
+                    meta=event_meta,
+                    event_type=_InvocationEventType.CANCELLED.value,
+                    timestamp=time.time(),
+                    payload=payload,
+                )
             )
 
             effective_ctx.mark_error_logged(err)
 
         def _emit_failed(
             effective_ctx: LogContextProto,
+            event_meta: LogEventMeta,
             effective_kwargs: dict[str, Any],
             err: Exception,
-            entity_id: str | None,
         ) -> None:
             payload: dict[str, Any] = {}
 
@@ -628,21 +633,26 @@ def log_invocation(
                         policy_applied = True
                         if force_log:
                             payload["error"] = effective_ctx.build_error_payload(err)
-                            effective_ctx.log_event(
-                                event,
-                                error_level,
-                                payload,
-                                event_type=_InvocationEventType.FAILED.value,
-                                entity_id=entity_id,
+
+                            effective_ctx.emit_log_event(
+                                LogEvent(
+                                    level=error_level,
+                                    meta=event_meta,
+                                    event_type=_InvocationEventType.FAILED.value,
+                                    timestamp=time.time(),
+                                    payload=payload,
+                                )
                             )
                             effective_ctx.mark_error_logged(err)
                         else:
-                            effective_ctx.log_event(
-                                event,
-                                error_level_suppressed,
-                                payload,
-                                event_type=_InvocationEventType.FAILED.value,
-                                entity_id=entity_id,
+                            effective_ctx.emit_log_event(
+                                LogEvent(
+                                    level=error_level_suppressed,
+                                    meta=event_meta,
+                                    event_type=_InvocationEventType.FAILED.value,
+                                    timestamp=time.time(),
+                                    payload=payload,
+                                )
                             )
 
                             effective_ctx.mark_error_logged(err)
@@ -651,28 +661,33 @@ def log_invocation(
             if not policy_applied:
                 if not effective_ctx.is_error_logged(err):
                     payload["error"] = effective_ctx.build_error_payload(err)
-                    effective_ctx.log_event(
-                        event,
-                        error_level,
-                        payload,
-                        event_type=_InvocationEventType.FAILED.value,
-                        entity_id=entity_id,
+                    effective_ctx.emit_log_event(
+                        LogEvent(
+                            level=error_level,
+                            meta=event_meta,
+                            event_type=_InvocationEventType.FAILED.value,
+                            timestamp=time.time(),
+                            payload=payload,
+                        )
                     )
+
                     effective_ctx.mark_error_logged(err)
                 else:
-                    effective_ctx.log_event(
-                        event,
-                        error_level_suppressed,
-                        payload,
-                        event_type=_InvocationEventType.FAILED.value,
-                        entity_id=entity_id,
+                    effective_ctx.emit_log_event(
+                        LogEvent(
+                            level=error_level_suppressed,
+                            meta=event_meta,
+                            event_type=_InvocationEventType.FAILED.value,
+                            timestamp=time.time(),
+                            payload=payload,
+                        )
                     )
 
         def _emit_success(
             effective_ctx: LogContextProto,
+            event_meta: LogEventMeta,
             effective_kwargs: dict[str, Any],
             result: Any,
-            entity_id: str | None,
         ) -> None:
             payload: dict[str, Any] = {}
 
@@ -693,12 +708,14 @@ def log_invocation(
                     result_obj=result,
                 )
 
-            effective_ctx.log_event(
-                event,
-                success_level,
-                payload,
-                event_type=_InvocationEventType.SUCCESS.value,
-                entity_id=entity_id,
+            effective_ctx.emit_log_event(
+                LogEvent(
+                    level=success_level,
+                    meta=event_meta,
+                    event_type=_InvocationEventType.SUCCESS.value,
+                    timestamp=time.time(),
+                    payload=payload,
+                )
             )
 
         if inspect.iscoroutinefunction(func):
@@ -711,23 +728,32 @@ def log_invocation(
 
                 entity_id = entity_id_getter() if entity_id_getter else _resolve_entity_id(args)
 
-                event_enabled = effective_ctx.is_event_enabled(event)
+                event_meta = LogEventMeta(
+                    event_namespace=effective_ctx.namespace,
+                    event_name=event,
+                    entity_id=entity_id,
+                    source_path=None,
+                    source_line=None,
+                    source_func=None,
+                )
+
+                event_enabled = effective_ctx.is_event_enabled(event_meta)
 
                 if event_enabled:
-                    _emit_invoke(effective_ctx, effective_kwargs, entity_id)
+                    _emit_invoke(effective_ctx, event_meta, effective_kwargs)
 
                 try:
                     result = await func(*args, **kwargs)
 
                 except asyncio.CancelledError as err:
-                    _emit_cancelled(effective_ctx, effective_kwargs, err, entity_id)
+                    _emit_cancelled(effective_ctx, event_meta, effective_kwargs, err)
                     raise
                 except Exception as err:
-                    _emit_failed(effective_ctx, effective_kwargs, err, entity_id)
+                    _emit_failed(effective_ctx, event_meta, effective_kwargs, err)
                     raise
                 else:
                     if event_enabled:
-                        _emit_success(effective_ctx, effective_kwargs, result, entity_id)
+                        _emit_success(effective_ctx, event_meta, effective_kwargs, result)
                     return result
 
             # noinspection PyUnnecessaryCast
@@ -740,18 +766,27 @@ def log_invocation(
             effective_ctx = ctx if ctx is not None else _resolve_context(args)
             entity_id = entity_id_getter() if entity_id_getter else _resolve_entity_id(args)
 
-            event_enabled = effective_ctx.is_event_enabled(event)
+            event_meta = LogEventMeta(
+                event_namespace=effective_ctx.namespace,
+                event_name=event,
+                entity_id=entity_id,
+                source_path=None,
+                source_line=None,
+                source_func=None,
+            )
+
+            event_enabled = effective_ctx.is_event_enabled(event_meta)
 
             if event_enabled:
-                _emit_invoke(effective_ctx, effective_kwargs, entity_id)
+                _emit_invoke(effective_ctx, event_meta, effective_kwargs)
 
             try:
                 result = func(*args, **kwargs)
             except asyncio.CancelledError as err:
-                _emit_cancelled(effective_ctx, effective_kwargs, err, entity_id)
+                _emit_cancelled(effective_ctx, event_meta, effective_kwargs, err)
                 raise
             except Exception as err:
-                _emit_failed(effective_ctx, effective_kwargs, err, entity_id)
+                _emit_failed(effective_ctx, event_meta, effective_kwargs, err)
                 raise
 
             if inspect.isawaitable(result):
@@ -760,20 +795,20 @@ def log_invocation(
                     try:
                         awaited = await cast(Awaitable[Any], result)
                     except asyncio.CancelledError as exc:
-                        _emit_cancelled(effective_ctx, effective_kwargs, exc, entity_id)
+                        _emit_cancelled(effective_ctx, event_meta, effective_kwargs, exc)
                         raise
                     except Exception as exc:
-                        _emit_failed(effective_ctx, effective_kwargs, exc, entity_id)
+                        _emit_failed(effective_ctx, event_meta, effective_kwargs, exc)
                         raise
                     else:
                         if event_enabled:
-                            _emit_success(effective_ctx, effective_kwargs, awaited, entity_id)
+                            _emit_success(effective_ctx, event_meta, effective_kwargs, awaited)
                         return awaited
 
                 return _await_and_log()
 
             if event_enabled:
-                _emit_success(effective_ctx, effective_kwargs, result, entity_id)
+                _emit_success(effective_ctx, event_meta, effective_kwargs, result)
             return result
 
         # noinspection PyUnnecessaryCast

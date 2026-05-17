@@ -8,7 +8,7 @@ from typing import Any, Awaitable, Mapping
 
 import pytest
 
-from mvx.common.logger.models import LogLevel
+from mvx.common.logger.models import LogEvent, LogEventMeta, LogLevel
 
 # noinspection PyProtectedMember
 from mvx.common.logger.log_components.log_invocation import (
@@ -27,15 +27,6 @@ from mvx.common.logger.log_components.log_invocation import (
 from mvx.common.logger.log_components.protocols import LogContextProto
 
 
-@dataclass(frozen=True)
-class RecordedEvent:
-    event: str
-    level: LogLevel
-    payload: Mapping[str, Any]
-    event_type: str | None
-    entity_id: str | None
-
-
 class RecordingContext(LogContextProto):
     def __init__(
         self,
@@ -46,14 +37,21 @@ class RecordingContext(LogContextProto):
     ) -> None:
         self.enabled = enabled
         self._verbosity_level = verbosity_level
-        self.events: list[RecordedEvent] = []
+        self.events: list[LogEvent] = []
         self.normalize_calls: list[tuple[Any, bool]] = []
         self.error_payload_calls: list[BaseException] = []
         self.marked_errors: list[BaseException] = []
         self._logged_error_ids: set[int] = set(already_logged_errors or set())
 
-    def is_event_enabled(self, event: str) -> bool:
+    @property
+    def namespace(self) -> str:
+        return "test.ns"
+
+    def is_event_enabled(self, event: LogEventMeta) -> bool:
         return self.enabled
+
+    def emit_log_event(self, event: LogEvent) -> None:
+        self.events.append(event)
 
     @property
     def verbosity_level(self) -> str:
@@ -105,59 +103,10 @@ class RecordingContext(LogContextProto):
         self.marked_errors.append(err)
         self._logged_error_ids.add(id(err))
 
-    def log_event(
-        self,
-        event: str,
-        level: LogLevel,
-        payload: Mapping[str, Any],
-        *,
-        event_namespace: str | None = None,
-        event_type: str | None = None,
-        entity_id: str | None = None,
-        source_path: str | None = None,
-        source_line: int | None = None,
-        source_func: str | None = None,
-    ) -> None:
-        if not self.enabled:
-            return
-
-        self.events.append(
-            RecordedEvent(
-                event=event,
-                level=level,
-                payload=dict(payload),
-                event_type=event_type,
-                entity_id=entity_id,
-            )
-        )
-
 
 class DisabledEventRecordingContext(RecordingContext):
-    def is_event_enabled(self, event: str) -> bool:
+    def is_event_enabled(self, event: LogEventMeta) -> bool:
         return False
-
-    def log_event(
-        self,
-        event: str,
-        level: LogLevel,
-        payload: Mapping[str, Any],
-        *,
-        event_namespace: str | None = None,
-        event_type: str | None = None,
-        entity_id: str | None = None,
-        source_path: str | None = None,
-        source_line: int | None = None,
-        source_func: str | None = None,
-    ) -> None:
-        self.events.append(
-            RecordedEvent(
-                event=event,
-                level=level,
-                payload=dict(payload),
-                event_type=event_type,
-                entity_id=entity_id,
-            )
-        )
 
 
 class ContextProvider:
@@ -917,7 +866,7 @@ def test_i01_log_invocation_sync_success_emits_invoke_and_success() -> None:
     assert len(ctx.events) == 2
 
     invoke = ctx.events[0]
-    assert invoke.event == "op.sync"
+    assert invoke.meta.event_name == "op.sync"
     assert invoke.level == LogLevel.INFO
     assert invoke.event_type == _InvocationEventType.INVOKE.value
     assert invoke.payload == {
@@ -946,8 +895,8 @@ def test_i02_log_invocation_sync_uses_context_provider_and_entity_provider() -> 
     assert target(owner, 10) == 11
 
     assert len(ctx.events) == 2
-    assert ctx.events[0].entity_id == "owner-1"
-    assert ctx.events[1].entity_id == "owner-1"
+    assert ctx.events[0].meta.entity_id == "owner-1"
+    assert ctx.events[1].meta.entity_id == "owner-1"
 
 
 def test_i03_log_invocation_sync_uses_explicit_entity_id_getter_over_provider() -> None:
@@ -964,8 +913,8 @@ def test_i03_log_invocation_sync_uses_explicit_entity_id_getter_over_provider() 
 
     assert target(owner) == "ok"
 
-    assert ctx.events[0].entity_id == "explicit-id"
-    assert ctx.events[1].entity_id == "explicit-id"
+    assert ctx.events[0].meta.entity_id == "explicit-id"
+    assert ctx.events[1].meta.entity_id == "explicit-id"
 
 
 def test_i04_log_invocation_sync_invoke_logs_closures() -> None:
@@ -1042,7 +991,38 @@ def test_i07_log_invocation_sync_event_disabled_emits_nothing_on_success() -> No
     assert ctx.events == []
 
 
-def test_i08_log_invocation_sync_event_disabled_still_logs_failure() -> None:
+def test_i08_log_invocation_disabled_success_does_not_prepare_payload() -> None:
+    class DisabledFailingNormalizeContext(RecordingContext):
+        def is_event_enabled(self, event: LogEventMeta) -> bool:
+            return False
+
+        def normalize_value_for_log(
+            self,
+            value: Any,
+            *,
+            unbounded: bool = False,
+        ) -> str | int | float | bool | bytes | dict[str, Any] | list[Any] | None:
+            raise AssertionError("payload must not be normalized")
+
+    ctx = DisabledFailingNormalizeContext()
+
+    @log_invocation(
+        "op.disabled.payload",
+        ctx=ctx,
+        log_closures_on_invoke={"x": object()},
+        log_kwargs_on_invoke=("value",),
+        log_result_on_success=(),
+    )
+    def target(value: object) -> object:
+        return value
+
+    marker = object()
+
+    assert target(marker) is marker
+    assert ctx.events == []
+
+
+def test_i09_log_invocation_sync_event_disabled_still_logs_failure() -> None:
     ctx = DisabledEventRecordingContext()
 
     @log_invocation("op.disabled.fail", ctx=ctx)
@@ -1053,7 +1033,7 @@ def test_i08_log_invocation_sync_event_disabled_still_logs_failure() -> None:
         target()
 
     assert len(ctx.events) == 1
-    assert ctx.events[0].event == "op.disabled.fail"
+    assert ctx.events[0].meta.event_name == "op.disabled.fail"
     assert ctx.events[0].event_type == _InvocationEventType.FAILED.value
     assert ctx.events[0].level == LogLevel.ERROR
     assert ctx.events[0].payload == {
@@ -1064,7 +1044,7 @@ def test_i08_log_invocation_sync_event_disabled_still_logs_failure() -> None:
     }
 
 
-def test_i09_log_invocation_sync_failure_logs_error_and_reraises() -> None:
+def test_i10_log_invocation_sync_failure_logs_error_and_reraises() -> None:
     ctx = RecordingContext()
     err = CustomError("boom")
 
@@ -1088,7 +1068,7 @@ def test_i09_log_invocation_sync_failure_logs_error_and_reraises() -> None:
     assert ctx.marked_errors == [err]
 
 
-def test_i10_log_invocation_sync_failure_suppresses_already_logged_error_payload() -> None:
+def test_i11_log_invocation_sync_failure_suppresses_already_logged_error_payload() -> None:
     err = CustomError("boom")
     ctx = RecordingContext(already_logged_errors={id(err)})
 
@@ -1108,7 +1088,7 @@ def test_i10_log_invocation_sync_failure_suppresses_already_logged_error_payload
     assert ctx.error_payload_calls == []
 
 
-def test_i11_log_invocation_sync_failure_policy_force_log() -> None:
+def test_i12_log_invocation_sync_failure_policy_force_log() -> None:
     ctx = RecordingContext()
 
     @log_invocation(
@@ -1129,7 +1109,7 @@ def test_i11_log_invocation_sync_failure_policy_force_log() -> None:
     }
 
 
-def test_i12_log_invocation_sync_failure_policy_suppress_error_payload() -> None:
+def test_i13_log_invocation_sync_failure_policy_suppress_error_payload() -> None:
     ctx = RecordingContext()
 
     @log_invocation(
@@ -1149,7 +1129,7 @@ def test_i12_log_invocation_sync_failure_policy_suppress_error_payload() -> None
     assert len(ctx.marked_errors) == 1
 
 
-def test_i13_log_invocation_sync_failure_context_formatter_system_keys_go_under_context() -> None:
+def test_i14_log_invocation_sync_failure_context_formatter_system_keys_go_under_context() -> None:
     ctx = RecordingContext()
 
     @log_invocation(
@@ -1176,7 +1156,7 @@ def test_i13_log_invocation_sync_failure_context_formatter_system_keys_go_under_
     }
 
 
-def test_i14_log_invocation_sync_cancelled_logs_cancelled_and_reraises() -> None:
+def test_i15_log_invocation_sync_cancelled_logs_cancelled_and_reraises() -> None:
     ctx = RecordingContext()
     err = asyncio.CancelledError("stop")
 
@@ -1200,7 +1180,7 @@ def test_i14_log_invocation_sync_cancelled_logs_cancelled_and_reraises() -> None
     assert ctx.marked_errors == [err]
 
 
-def test_i15_log_invocation_sync_cancelled_skips_when_error_already_logged() -> None:
+def test_i16_log_invocation_sync_cancelled_skips_when_error_already_logged() -> None:
     err = asyncio.CancelledError("stop")
     ctx = RecordingContext(already_logged_errors={id(err)})
 
@@ -1215,7 +1195,7 @@ def test_i15_log_invocation_sync_cancelled_skips_when_error_already_logged() -> 
     assert ctx.events[0].event_type == _InvocationEventType.INVOKE.value
 
 
-def test_i16_log_invocation_sync_event_disabled_still_logs_cancelled() -> None:
+def test_i17_log_invocation_sync_event_disabled_still_logs_cancelled() -> None:
     ctx = DisabledEventRecordingContext()
     err = asyncio.CancelledError("stop")
 
@@ -1227,7 +1207,7 @@ def test_i16_log_invocation_sync_event_disabled_still_logs_cancelled() -> None:
         target()
 
     assert len(ctx.events) == 1
-    assert ctx.events[0].event == "op.disabled.cancel"
+    assert ctx.events[0].meta.event_name == "op.disabled.cancel"
     assert ctx.events[0].event_type == _InvocationEventType.CANCELLED.value
     assert ctx.events[0].level == LogLevel.INFO
     assert ctx.events[0].payload == {
@@ -1240,7 +1220,7 @@ def test_i16_log_invocation_sync_event_disabled_still_logs_cancelled() -> None:
     assert ctx.marked_errors == [err]
 
 
-def test_i17_log_invocation_sync_failure_policy_uses_first_matching_rule() -> None:
+def test_i18_log_invocation_sync_failure_policy_uses_first_matching_rule() -> None:
     ctx = RecordingContext()
 
     @log_invocation(
@@ -1261,7 +1241,7 @@ def test_i17_log_invocation_sync_failure_policy_uses_first_matching_rule() -> No
     assert len(ctx.marked_errors) == 1
 
 
-def test_i18_log_invocation_sync_failure_policy_force_log_ignores_already_logged_marker() -> None:
+def test_i19_log_invocation_sync_failure_policy_force_log_ignores_already_logged_marker() -> None:
     err = CustomError("boom")
     ctx = RecordingContext(already_logged_errors={id(err)})
 
@@ -1288,7 +1268,7 @@ def test_i18_log_invocation_sync_failure_policy_force_log_ignores_already_logged
     assert ctx.marked_errors == [err]
 
 
-def test_i19_log_invocation_sync_entity_id_getter_error_propagates_before_logging() -> None:
+def test_i20_log_invocation_sync_entity_id_getter_error_propagates_before_logging() -> None:
     ctx = RecordingContext()
 
     def get_entity_id() -> str:
@@ -1495,8 +1475,8 @@ async def test_k02_log_invocation_async_uses_provider_context() -> None:
     assert await target(owner, 10) == 11
 
     assert len(ctx.events) == 2
-    assert ctx.events[0].entity_id == "async-owner"
-    assert ctx.events[1].entity_id == "async-owner"
+    assert ctx.events[0].meta.entity_id == "async-owner"
+    assert ctx.events[1].meta.entity_id == "async-owner"
 
 
 @pytest.mark.asyncio
@@ -1523,7 +1503,7 @@ async def test_k04_log_invocation_async_event_disabled_still_logs_failure() -> N
         await target()
 
     assert len(ctx.events) == 1
-    assert ctx.events[0].event == "op.disabled.async.fail"
+    assert ctx.events[0].meta.event_name == "op.disabled.async.fail"
     assert ctx.events[0].event_type == _InvocationEventType.FAILED.value
     assert ctx.events[0].level == LogLevel.ERROR
     assert ctx.events[0].payload == {
@@ -1626,7 +1606,7 @@ async def test_k09_log_invocation_async_event_disabled_still_logs_cancelled() ->
         await target()
 
     assert len(ctx.events) == 1
-    assert ctx.events[0].event == "op.disabled.async.cancel"
+    assert ctx.events[0].meta.event_name == "op.disabled.async.cancel"
     assert ctx.events[0].event_type == _InvocationEventType.CANCELLED.value
     assert ctx.events[0].level == LogLevel.INFO
     assert ctx.events[0].payload == {

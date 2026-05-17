@@ -1,7 +1,7 @@
 # src/mvx/common/logger/log_context/log_payload_helpers.py
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, overload
 import enum
 
 from ..models import LogPayloadProvider, LogAdapterResolver
@@ -162,8 +162,30 @@ def _normalize_leaf(
 # ---------- Container normalization ----------
 
 
+@overload
 def normalize_list_for_log(
-    value: Any,
+    value: list[Any],
+    *,
+    log_adapter_resolver: LogAdapterResolver | None,
+    verbosity_level: str | None,
+    max_items: int | None,
+    max_str_len: int | None,
+) -> list[Any]: ...
+
+
+@overload
+def normalize_list_for_log(
+    value: object,
+    *,
+    log_adapter_resolver: LogAdapterResolver | None,
+    verbosity_level: str | None,
+    max_items: int | None,
+    max_str_len: int | None,
+) -> str | list[Any]: ...
+
+
+def normalize_list_for_log(
+    value: object,
     *,
     log_adapter_resolver: LogAdapterResolver | None,
     verbosity_level: str | None,
@@ -209,8 +231,30 @@ def normalize_list_for_log(
     return result
 
 
+@overload
 def normalize_dict_for_log(
-    value: Any,
+    value: dict[str, Any],
+    *,
+    log_adapter_resolver: LogAdapterResolver | None,
+    verbosity_level: str | None,
+    max_items: int | None,
+    max_str_len: int | None,
+) -> dict[str, Any]: ...
+
+
+@overload
+def normalize_dict_for_log(
+    value: object,
+    *,
+    log_adapter_resolver: LogAdapterResolver | None,
+    verbosity_level: str | None,
+    max_items: int | None,
+    max_str_len: int | None,
+) -> str | dict[str, Any]: ...
+
+
+def normalize_dict_for_log(
+    value: object,
     *,
     log_adapter_resolver: LogAdapterResolver | None,
     verbosity_level: str | None,

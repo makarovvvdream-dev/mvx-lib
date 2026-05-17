@@ -2,7 +2,7 @@
 from __future__ import annotations
 from typing import Any, Mapping, Protocol, runtime_checkable
 
-from ..models import LogLevel
+from ..models import LogLevel, LogEvent, LogEventMeta
 
 # ---- LogContextProto ---------------------------------------------------------------------
 
@@ -10,15 +10,15 @@ from ..models import LogLevel
 @runtime_checkable
 class LogContextProto(Protocol):
 
-    def is_event_enabled(self, event: str) -> bool:
+    def is_event_enabled(self, event: LogEventMeta) -> bool:
         """
         Determines whether a specific event is enabled for logging.
 
         This method checks the applied log policy to determine if the
         specified event is enabled for logging or not and returns a boolean value accordingly.
 
-        :param event: The name of the event to check.
-        :type event: str
+        :param event: The event to check.
+        :type event: LogEventMeta
         :return: True if the event is enabled, False otherwise.
         :rtype: bool
         """
@@ -37,6 +37,18 @@ class LogContextProto(Protocol):
         :rtype: str
         """
         ...
+
+    @property
+    def namespace(self) -> str:
+        """
+        Provides access to the namespace associated with the context.
+
+        The namespace is a string identifier that can be used to distinguish the
+        context or scope for certain operations or data within the object.
+
+        :return: The namespace as a string.
+        :rtype: str
+        """
 
     def normalize_value_for_log(
         self,
@@ -87,41 +99,19 @@ class LogContextProto(Protocol):
         """
         ...
 
-    def log_event(
+    def emit_log_event(
         self,
-        event: str,
-        level: LogLevel,
-        payload: Mapping[str, Any],
-        *,
-        event_namespace: str | None = None,
-        event_type: str | None = None,
-        entity_id: str | None = None,
-        source_path: str | None = None,
-        source_line: int | None = None,
-        source_func: str | None = None,
+        event: LogEvent,
     ) -> None:
         """
-        Logs an event with a specified level, payload, and optional metadata such as
-        event type and entity ID.
+        Emit a fully prepared log event to the configured sink.
 
-        :param event: The name of the event being logged.
-        :type event: str
-        :param level: The log level indicating the severity or importance of the event.
-        :type level: LogLevel
-        :param payload: Additional data or context for the event.
-        :type payload: Mapping[str, Any]
-        :param event_namespace: Optional namespace for the event.
-        :type event_namespace: str | None
-        :param event_type: Optional event category.
-        :type event_type: str | None
-        :param entity_id: Optional associated entity identifier.
-        :type entity_id: str | None
-        :param source_path: Optional path to the source file where the event was logged.
-        :type source_path: str | None
-        :param source_line: Optional line number in the source file where the event was logged.
-        :type source_line: int | None
-        :param source_func: Optional name of the function where the event was logged.
-        :type source_func: str | None
+        This method does not apply the event policy and does not perform payload
+        normalization. The caller is responsible for deciding whether the event
+        should be emitted and for providing a log-ready payload.
+
+        :param event: The prepared log event to emit.
+        :type event: LogEvent
         :return: None
         :rtype: None
         """

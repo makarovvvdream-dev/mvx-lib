@@ -122,7 +122,9 @@ ctx.log_info_event(
 )
 ```
 
-These fields are optional. They are useful when an event should be connected to a specific entity, result type, or source-code location.
+These fields are optional. `entity_id` and source-code fields are part of event metadata. `event_type` describes the emitted event itself, for example an invocation outcome such as `invoke`, `success`, `failed`, or `cancelled`.
+
+Before preparing the final event payload, the context checks the event policy if one is set for that context. The policy receives only event metadata. If the policy rejects the event, the payload is not normalized and the event is not passed to the sink.
 
 Before sending an event, the context checks the event policy if one is set for that context. If the policy rejects the event, it is not passed to the sink.
 
@@ -258,7 +260,7 @@ The mark is applied on a best-effort basis. If the exception object does not all
 
 ## Payload normalization helper functions
 
-Sometimes a payload is assembled manually before calling `log_info_event()` or another logging method.
+Sometimes user code wants to normalize selected values explicitly before assembling a payload.
 
 In this case, the context can be used as a single normalization point for values.
 
@@ -329,7 +331,11 @@ In this case, the `max_items` limit is not applied to this specific call.
 
 These helper methods are useful when user code wants to prepare payload values before passing them to a logging method.
 
-The logging methods do not normalize the payload automatically. They receive the payload provided by the caller and put it into the `LogEvent`.
+The logging methods normalize the payload automatically by default. This means that values inside the payload are prepared according to the context settings before the final `LogEvent` is delivered.
+
+The helper methods are still useful when user code wants to normalize values explicitly before assembling a payload, or when a lower-level component builds a prepared `LogEvent` and emits it directly.
+
+If the payload is already log-ready, normalization can be skipped explicitly with `skip_payload_normalization=True`.
 
 The helper methods let user code apply the context settings explicitly: `verbosity_level`, `max_str_len`, `max_items`, and `log_adapter_resolver`.
 

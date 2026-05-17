@@ -7,7 +7,7 @@
 
 A `log sink` is responsible for event delivery.
 
-User code creates an event through `LogContext`. The context decides whether this event should be logged and passes it to the configured sink.
+User code creates an event through `LogContext`. The context checks event metadata, prepares the final `LogEvent`, and passes accepted events to the configured sink.
 
 After that, the sink's job is to deliver the event to its destination.
 
@@ -175,7 +175,7 @@ This explicitly connects the context and the sink.
 
 A sink is an event delivery mechanism.
 
-The context decides which events should be sent and with which settings.
+The context decides which events should be sent, prepares accepted event payloads, and passes completed `LogEvent` objects to the sink.
 
 The sink receives a completed event and delivers it to its destination.
 

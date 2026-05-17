@@ -18,10 +18,7 @@ from mvx.common.logger.adapter_logging.logging_stream_sink import (
     DEFAULT_STREAM_LOGGER_NAME,
     StreamLogSink,
 )
-from mvx.common.logger.models import (
-    LogEvent,
-    LogLevel,
-)
+from mvx.common.logger.models import LogEvent, LogEventMeta, LogLevel
 
 # ---- Test helpers ------------------------------------------------------------------------
 
@@ -29,27 +26,29 @@ from mvx.common.logger.models import (
 def make_event(
     *,
     level: int = logging.INFO,
-    event_namespace: str = "mvx.test",
+    event_namespace: str | None = "mvx.test",
     event_name: str = "event.done",
-    event_type: str = "operation",
+    event_type: str | None = "operation",
     timestamp: float = 1_700_000_000.123,
-    entity_id: str = "entity-1",
+    entity_id: str | None = "entity-1",
     payload: Mapping[str, Any] | None = None,
-    source_path: str = "/tmp/source.py",
-    source_line: int = 42,
-    source_func: str = "run",
+    source_path: str | None = "/tmp/source.py",
+    source_line: int | None = 42,
+    source_func: str | None = "run",
 ) -> LogEvent:
     return LogEvent(
         level=level,
-        event_namespace=event_namespace,
-        event_name=event_name,
+        meta=LogEventMeta(
+            event_namespace=event_namespace,
+            event_name=event_name,
+            entity_id=entity_id,
+            source_path=source_path,
+            source_line=source_line,
+            source_func=source_func,
+        ),
         event_type=event_type,
         timestamp=timestamp,
-        entity_id=entity_id,
         payload=payload if payload is not None else {"result": "ok"},
-        source_path=source_path,
-        source_line=source_line,
-        source_func=source_func,
     )
 
 
@@ -372,7 +371,31 @@ def test_d04_log_uses_custom_formatter_fields(capsys: pytest.CaptureFixture[str]
         sink.close()
 
 
-def test_d05_log_respects_level(capsys: pytest.CaptureFixture[str]) -> None:
+def test_d05_log_handles_missing_optional_event_fields(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = LoggingStreamConfig(
+        stream_output=LogStreamOutput.STDOUT,
+        log_format="%(event_namespace)s:%(event_type)s:%(entity_id)s:%(message)s",
+    )
+    sink = StreamLogSink(config=config)
+
+    try:
+        sink.log(
+            make_event(
+                event_namespace=None,
+                entity_id=None,
+                event_type=None,
+            )
+        )
+        captured = capsys.readouterr()
+
+        assert captured.out.strip() == ("<not defined>:<not defined>:<not defined>:event.done")
+    finally:
+        sink.close()
+
+
+def test_d06_log_respects_level(capsys: pytest.CaptureFixture[str]) -> None:
     config = LoggingStreamConfig(
         stream_output=LogStreamOutput.STDOUT,
         level=LogLevel.ERROR,
@@ -391,7 +414,7 @@ def test_d05_log_respects_level(capsys: pytest.CaptureFixture[str]) -> None:
         sink.close()
 
 
-def test_d06_log_respects_blocking_filter(capsys: pytest.CaptureFixture[str]) -> None:
+def test_d07_log_respects_blocking_filter(capsys: pytest.CaptureFixture[str]) -> None:
     blocking_filter = RecordingFilter(allow=False)
     config = LoggingStreamConfig(
         stream_output=LogStreamOutput.STDOUT,
@@ -412,7 +435,7 @@ def test_d06_log_respects_blocking_filter(capsys: pytest.CaptureFixture[str]) ->
         sink.close()
 
 
-def test_d07_log_respects_allowing_filter(capsys: pytest.CaptureFixture[str]) -> None:
+def test_d08_log_respects_allowing_filter(capsys: pytest.CaptureFixture[str]) -> None:
     allowing_filter = RecordingFilter()
     config = LoggingStreamConfig(
         stream_output=LogStreamOutput.STDOUT,
@@ -432,7 +455,7 @@ def test_d07_log_respects_allowing_filter(capsys: pytest.CaptureFixture[str]) ->
         sink.close()
 
 
-def test_d08_log_after_close_is_ignored(capsys: pytest.CaptureFixture[str]) -> None:
+def test_d09_log_after_close_is_ignored(capsys: pytest.CaptureFixture[str]) -> None:
     config = LoggingStreamConfig(
         stream_output=LogStreamOutput.STDOUT,
         log_format="%(message)s",

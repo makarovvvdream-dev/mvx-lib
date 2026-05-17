@@ -186,7 +186,7 @@ file_sink = configure_log_sink(
 
 This setting applies to the standard `logging` handler.
 
-It does not replace the context event policy. The event policy decides which events the context passes to the sink at all. The handler level is applied later, inside the file sink, during delivery through standard `logging`.
+It does not replace the context event policy. The event policy decides which events the context passes to the sink by checking event metadata before the final payload is prepared. The handler level is applied later, inside the file sink, during delivery through standard `logging`.
 
 ## Custom formatter factory
 

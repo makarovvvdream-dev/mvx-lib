@@ -10,6 +10,7 @@ __all__ = (
     "LogPayloadProvider",
     "LogAdapter",
     "LogAdapterResolver",
+    "LogEventMeta",
     "LogEvent",
     "LogSinkProto",
     "LogSinkDescriptor",
@@ -64,17 +65,22 @@ LogAdapterResolver: TypeAlias = Callable[[Any], LogAdapter | None]
 
 
 @dataclass(frozen=True, slots=True)
-class LogEvent:
-    level: int
+class LogEventMeta:
     event_namespace: str | None
     event_name: str
-    event_type: str | None
-    timestamp: float
     entity_id: str | None
-    payload: Mapping[str, Any]
     source_path: str | None
     source_line: int | None
     source_func: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class LogEvent:
+    level: int
+    meta: LogEventMeta
+    event_type: str | None
+    timestamp: float
+    payload: Mapping[str, Any]
 
 
 @runtime_checkable
@@ -114,4 +120,4 @@ class LogSinkClassProto(Protocol):
 
 @runtime_checkable
 class LogEventPolicy(Protocol):
-    def is_event_enabled(self, event: str) -> bool: ...
+    def is_event_enabled(self, event: LogEventMeta) -> bool: ...

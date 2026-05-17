@@ -19,16 +19,21 @@ It should be small at the point of use: get a `LogContext`, attach `log_invocati
 
 In `MVX Logger`, code does not format log strings, instead it emits structured events.
 
-An event has the following fields:
+An event consists of two parts.
+
+The first part is event metadata used for event selection:
 
 - namespace;
 - event name;
-- event type;
-- level;
-- timestamp;
 - entity id;
-- source metadata;
-- optional payload.
+- source metadata.
+
+The second part is the emitted log event data:
+
+- level;
+- event type;
+- timestamp;
+- payload.
 
 The payload may be minimal or detailed. It may contain operation arguments, a result, an error, object state, or any other data that is meaningful for a particular event.
 
@@ -46,7 +51,11 @@ Logging width answers the question:
 
 This is controlled by policies.
 
-A policy may allow or reject an event by namespace, event name, event type, level, or any other rule. This makes it possible to control which parts of a library are verbose, which parts are quiet, and which parts are enabled only in diagnostic mode.
+A policy may allow or reject an event by its metadata: namespace, event name, entity id, or source location. The policy does not inspect payload, level, event type, or timestamp.
+
+This makes it possible to control which parts of a library are verbose, which parts are quiet, and which parts are enabled only in diagnostic mode.
+
+For operation-style logging, the policy controls whether the ordinary invocation event is enabled. Failure and cancellation are treated as error-path outcomes by `log_invocation`.
 
 For example, a policy may log only errors, enable the full lifecycle of operations, or keep `failed` and `cancelled` events while suppressing noisy `invoke` and `success` events.
 
@@ -68,7 +77,7 @@ For this reason, `MVX Logger` provides several layers of depth control:
 * dedicated error serialization;
 * masking or shortening of sensitive and large values.
 
-The idea is that the logger should not know the internal structure of an LDAP response, a network transport outcome, a schema descriptor, or a domain error. An object may provide a compact or detailed representation of itself, while `LogContext` applies the common normalization policy.
+The idea is that the logger should not know the internal structure of an LDAP response, a network transport outcome, a schema descriptor, or a domain error. An object may provide a compact or detailed representation of itself. After the metadata policy accepts an event, `LogContext` applies the common payload normalization rules before delivering the final `LogEvent` to a sink.
 
 ## LogContext as the entry point
 
@@ -78,12 +87,13 @@ If the standard `logging.Logger` is the usual entry point for message-based logs
 
 `LogContext` is responsible for several tasks:
 
-* accepting an event;
-* applying the event selection policy;
-* normalizing the payload;
-* applying payload depth rules;
-* handling logging errors according to policy;
-* passing the event to a sink.
+- accepting an event;
+- building event metadata;
+- applying the event selection policy to that metadata;
+- normalizing the payload for accepted events;
+- building the final `LogEvent`;
+- handling logging errors according to policy;
+- passing the event to a sink.
 
 At the same time, `LogContext` keeps the familiar idea of namespaces and inheritance. A context can be retrieved by name, specific namespaces can be configured, and the logger works with a default bootstrap state out of the box.
 
@@ -188,7 +198,11 @@ The function does not know where the events will be delivered. It does not know 
 
 It simply performs the operation.
 
-The event policy decides whether the event is logged. Payload serialization rules decide how deep the payload should be. The sink decides how to deliver the final event.
+For the ordinary invocation path, the event policy decides whether invocation logging is enabled by checking event metadata. If it is enabled, `log_invocation` builds log-ready payloads for `invoke` and `success`.
+
+Failure and cancellation are handled as error-path outcomes and are emitted independently of the ordinary invocation policy.
+
+The sink receives the final `LogEvent` and delivers it.
 
 ## What MVX Logger is not
 

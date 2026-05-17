@@ -13,6 +13,7 @@ from ..models import (
     LogAdapterResolver,
     LogSinkProto,
     LogEventPolicy,
+    LogEventMeta,
     LogEvent,
 )
 from ..helpers import log_internal_error as _log_internal_error
@@ -376,7 +377,7 @@ class LogContext:
 
     # ---- Logging events ------------------------------------------------------------------
 
-    def is_event_enabled(self, event: str) -> bool:
+    def is_event_enabled(self, event: LogEventMeta) -> bool:
         with self._config_lock:
             event_policy = self._event_policy
 
@@ -385,38 +386,13 @@ class LogContext:
 
         return event_policy.is_event_enabled(event)
 
-    def log_event(
+    def emit_log_event(
         self,
-        event: str,
-        level: LogLevel,
-        payload: Mapping[str, Any],
-        *,
-        event_namespace: str | None = None,
-        event_type: str | None = None,
-        entity_id: str | None = None,
-        source_path: str | None = None,
-        source_line: int | None = None,
-        source_func: str | None = None,
+        event: LogEvent,
     ) -> None:
-        if not self.is_event_enabled(event):
-            return
-
-        log_event = LogEvent(
-            level=level,
-            event_namespace=event_namespace if event_namespace is not None else self.namespace,
-            event_name=event,
-            event_type=event_type,
-            timestamp=time.time(),
-            entity_id=entity_id,
-            payload=payload,
-            source_path=source_path,
-            source_line=source_line,
-            source_func=source_func,
-        )
-
         # noinspection PyBroadException
         try:
-            self.log_sink.log(log_event)
+            self.log_sink.log(event)
             # not under lock intentionally
             self._log_error_printed = False
 
@@ -430,9 +406,50 @@ class LogContext:
                 if not self._log_error_printed:
                     # not under lock intentionally
                     self._log_error_printed = True
-                    _log_internal_error("LogContext.log_event() failed", exc)
+                    _log_internal_error("LogContext log event failed", exc)
             else:
                 pass
+
+    def log_event(
+        self,
+        event: str,
+        level: LogLevel,
+        payload: Mapping[str, Any],
+        *,
+        event_namespace: str | None = None,
+        event_type: str | None = None,
+        entity_id: str | None = None,
+        source_path: str | None = None,
+        source_line: int | None = None,
+        source_func: str | None = None,
+        skip_payload_normalization: bool = False,
+    ) -> None:
+
+        log_event_meta = LogEventMeta(
+            event_namespace=event_namespace if event_namespace is not None else self.namespace,
+            event_name=event,
+            entity_id=entity_id,
+            source_path=source_path,
+            source_line=source_line,
+            source_func=source_func,
+        )
+
+        if not self.is_event_enabled(log_event_meta):
+            return
+
+        payload_for_log = (
+            self.normalize_dict_for_log(payload) if not skip_payload_normalization else payload
+        )
+
+        log_event = LogEvent(
+            meta=log_event_meta,
+            level=level,
+            event_type=event_type,
+            timestamp=time.time(),
+            payload=payload_for_log,
+        )
+
+        self.emit_log_event(log_event)
 
     def log_debug_event(
         self,
@@ -445,6 +462,7 @@ class LogContext:
         source_path: str | None = None,
         source_line: int | None = None,
         source_func: str | None = None,
+        skip_payload_normalization: bool = False,
     ) -> None:
         """
         Emit a structured debug log event.
@@ -459,6 +477,7 @@ class LogContext:
             source_path=source_path,
             source_line=source_line,
             source_func=source_func,
+            skip_payload_normalization=skip_payload_normalization,
         )
 
     def log_info_event(
@@ -472,6 +491,7 @@ class LogContext:
         source_path: str | None = None,
         source_line: int | None = None,
         source_func: str | None = None,
+        skip_payload_normalization: bool = False,
     ) -> None:
         """
         Emit a structured info log event.
@@ -486,6 +506,7 @@ class LogContext:
             source_path=source_path,
             source_line=source_line,
             source_func=source_func,
+            skip_payload_normalization=skip_payload_normalization,
         )
 
     def log_warning_event(
@@ -499,6 +520,7 @@ class LogContext:
         source_path: str | None = None,
         source_line: int | None = None,
         source_func: str | None = None,
+        skip_payload_normalization: bool = False,
     ) -> None:
         """
         Emit a structured warning log event.
@@ -513,6 +535,7 @@ class LogContext:
             source_path=source_path,
             source_line=source_line,
             source_func=source_func,
+            skip_payload_normalization=skip_payload_normalization,
         )
 
     def log_error_event(
@@ -526,6 +549,7 @@ class LogContext:
         source_path: str | None = None,
         source_line: int | None = None,
         source_func: str | None = None,
+        skip_payload_normalization: bool = False,
     ) -> None:
         """
         Emit a structured error log event.
@@ -540,6 +564,7 @@ class LogContext:
             source_path=source_path,
             source_line=source_line,
             source_func=source_func,
+            skip_payload_normalization=skip_payload_normalization,
         )
 
     # ---- Error handlers ------------------------------------------------------------------
@@ -647,9 +672,25 @@ class LogContext:
             max_str_len=self.max_str_len,
         )
 
+    @overload
     def normalize_list_for_log(
         self,
-        value: Any,
+        value: list[Any],
+        *,
+        unbounded: bool = False,
+    ) -> list[Any]: ...
+
+    @overload
+    def normalize_list_for_log(
+        self,
+        value: object,
+        *,
+        unbounded: bool = False,
+    ) -> str | list[Any]: ...
+
+    def normalize_list_for_log(
+        self,
+        value: object,
         *,
         unbounded: bool = False,
     ) -> str | list[Any]:
@@ -666,9 +707,24 @@ class LogContext:
             max_str_len=self.max_str_len,
         )
 
+    @overload
     def normalize_dict_for_log(
         self,
-        value: Any,
+        value: Mapping[str, Any],
+        *,
+        unbounded: bool = False,
+    ) -> dict[str, Any]: ...
+
+    @overload
+    def normalize_dict_for_log(
+        self,
+        value: object,
+        *,
+        unbounded: bool = False,
+    ) -> str | dict[str, Any]: ...
+    def normalize_dict_for_log(
+        self,
+        value: object,
         *,
         unbounded: bool = False,
     ) -> str | dict[str, Any]:

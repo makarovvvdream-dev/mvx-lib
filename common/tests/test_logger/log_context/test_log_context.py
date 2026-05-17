@@ -19,7 +19,14 @@ from mvx.common.logger.log_context.log_context import (
     LogVerbosityLevel,
 )
 from mvx.common.logger.errors import LogContextResetError, LogContextUnableToLog
-from mvx.common.logger.models import LogEvent, LogEventPolicy, LogLevel, LogSinkProto
+
+from mvx.common.logger.models import (
+    LogEvent,
+    LogEventMeta,
+    LogEventPolicy,
+    LogLevel,
+    LogSinkProto,
+)
 
 
 class RecordingLogSink:
@@ -37,9 +44,9 @@ class RecordingLogSink:
 class RecordingEventPolicy:
     def __init__(self, *, enabled: bool = True) -> None:
         self.enabled = enabled
-        self.checked_events: list[str] = []
+        self.checked_events: list[LogEventMeta] = []
 
-    def is_event_enabled(self, event: str) -> bool:
+    def is_event_enabled(self, event: LogEventMeta) -> bool:
         self.checked_events.append(event)
         return self.enabled
 
@@ -47,6 +54,11 @@ class RecordingEventPolicy:
 class User:
     def __init__(self, name: str) -> None:
         self.name = name
+
+
+class ExplodingPayloadProvider:
+    def to_log_payload(self) -> dict[str, Any]:
+        raise AssertionError("payload must not be normalized")
 
 
 def make_sink() -> RecordingLogSink:
@@ -108,6 +120,25 @@ def make_user_resolver(value: Any) -> Callable[[Any, str], dict[str, Any]] | Non
         }
 
     return None
+
+
+def make_log_event_meta(
+    *,
+    event_name: str = "event.x",
+    event_namespace: str = "test.ns",
+    entity_id: str | None = None,
+    source_path: str | None = None,
+    source_line: int | None = None,
+    source_func: str | None = None,
+) -> LogEventMeta:
+    return LogEventMeta(
+        event_namespace=event_namespace,
+        event_name=event_name,
+        entity_id=entity_id,
+        source_path=source_path,
+        source_line=source_line,
+        source_func=source_func,
+    )
 
 
 # ---------- A: constructor / root context validation ----------
@@ -485,44 +516,50 @@ def test_c24_root_log_adapter_resolver_is_none_by_default() -> None:
 
 def test_d01_event_policy_none_enables_all_events() -> None:
     ctx = make_root_context()
+    event = make_log_event_meta()
 
     assert ctx.event_policy is None
-    assert ctx.is_event_enabled("event.x") is True
+    assert ctx.is_event_enabled(event) is True
 
 
 def test_d02_event_policy_is_used_when_present() -> None:
     policy = RecordingEventPolicy(enabled=False)
     ctx = make_root_context(event_policy=policy)
+    event = make_log_event_meta(event_name="event.x")
 
-    assert ctx.is_event_enabled("event.x") is False
-    assert policy.checked_events == ["event.x"]
+    assert ctx.is_event_enabled(event) is False
+    assert policy.checked_events == [event]
 
 
 def test_d03_set_event_policy_is_used() -> None:
     policy = RecordingEventPolicy(enabled=False)
     ctx = make_root_context()
+    event = make_log_event_meta(event_name="event.x")
 
     ctx.set_event_policy(cast(LogEventPolicy, policy))
 
     assert ctx.event_policy is policy
-    assert ctx.is_event_enabled("event.x") is False
+    assert ctx.is_event_enabled(event) is False
+    assert policy.checked_events == [event]
 
 
 def test_d04_reset_event_policy_enables_all_events() -> None:
     ctx = make_root_context(event_policy=RecordingEventPolicy(enabled=False))
+    event = make_log_event_meta(event_name="event.x")
 
     ctx.reset_event_policy()
 
     assert ctx.event_policy is None
-    assert ctx.is_event_enabled("event.x") is True
+    assert ctx.is_event_enabled(event) is True
 
 
 def test_d05_child_does_not_inherit_parent_event_policy() -> None:
     parent = make_root_context(event_policy=RecordingEventPolicy(enabled=False))
     child = make_child_context(parent)
+    event = make_log_event_meta(event_name="event.x")
 
     assert child.event_policy is None
-    assert child.is_event_enabled("event.x") is True
+    assert child.is_event_enabled(event) is True
 
 
 def test_d06_disabled_event_is_not_logged() -> None:
@@ -555,8 +592,70 @@ def test_d07_enabled_event_is_logged() -> None:
         payload={"x": 1},
     )
 
-    assert policy.checked_events == ["event.x"]
+    assert len(policy.checked_events) == 1
+    assert policy.checked_events[0].event_name == "event.x"
+
     assert len(sink.events) == 1
+    assert sink.events[0].meta.event_name == "event.x"
+
+
+def test_d08_event_policy_receives_log_event_meta_before_payload_normalization() -> None:
+    sink = make_sink()
+    policy = RecordingEventPolicy(enabled=True)
+    ctx = make_root_context(
+        log_sink=sink,
+        event_policy=policy,
+    )
+    payload = {"x": object()}
+
+    ctx.log_event(
+        event="event.x",
+        level=LogLevel.WARNING,
+        payload=payload,
+        event_namespace="custom.ns",
+        event_type="operation",
+        entity_id="entity-1",
+        source_path="/tmp/a.py",
+        source_line=10,
+        source_func="func",
+    )
+
+    assert len(policy.checked_events) == 1
+
+    checked = policy.checked_events[0]
+
+    assert checked.event_namespace == "custom.ns"
+    assert checked.event_name == "event.x"
+    assert checked.entity_id == "entity-1"
+    assert checked.source_path == "/tmp/a.py"
+    assert checked.source_line == 10
+    assert checked.source_func == "func"
+
+    assert len(sink.events) == 1
+
+    logged = sink.events[0]
+
+    assert logged.level is LogLevel.WARNING
+    assert logged.meta is checked
+    assert logged.event_type == "operation"
+    assert logged.payload is not payload
+    assert logged.payload == {"x": "<object>"}
+
+
+def test_d09_disabled_event_does_not_normalize_payload() -> None:
+    sink = make_sink()
+    ctx = make_root_context(
+        log_sink=sink,
+        event_policy=RecordingEventPolicy(enabled=False),
+    )
+
+    ctx.log_event(
+        event="event.x",
+        level=LogLevel.INFO,
+        payload={"provider": ExplodingPayloadProvider()},
+    )
+
+    assert sink.events == []
 
 
 # ---------- E: log_event construction ----------
@@ -581,15 +680,15 @@ def test_e01_log_event_builds_log_event_with_defaults() -> None:
     logged = sink.events[0]
 
     assert logged.level is LogLevel.INFO
-    assert logged.event_namespace == "test.ns"
-    assert logged.event_name == "event.x"
+    assert logged.meta.event_namespace == "test.ns"
+    assert logged.meta.event_name == "event.x"
     assert logged.event_type is None
     assert before <= logged.timestamp <= after
-    assert logged.entity_id is None
+    assert logged.meta.entity_id is None
     assert logged.payload == {"x": 1}
-    assert logged.source_path is None
-    assert logged.source_line is None
-    assert logged.source_func is None
+    assert logged.meta.source_path is None
+    assert logged.meta.source_line is None
+    assert logged.meta.source_func is None
 
 
 def test_e02_log_event_uses_explicit_metadata() -> None:
@@ -611,14 +710,14 @@ def test_e02_log_event_uses_explicit_metadata() -> None:
     logged = sink.events[0]
 
     assert logged.level is LogLevel.WARNING
-    assert logged.event_namespace == "custom.ns"
-    assert logged.event_name == "event.x"
+    assert logged.meta.event_namespace == "custom.ns"
+    assert logged.meta.event_name == "event.x"
     assert logged.event_type == "operation"
-    assert logged.entity_id == "entity-1"
+    assert logged.meta.entity_id == "entity-1"
     assert logged.payload == {"x": 1}
-    assert logged.source_path == "/tmp/a.py"
-    assert logged.source_line == 10
-    assert logged.source_func == "func"
+    assert logged.meta.source_path == "/tmp/a.py"
+    assert logged.meta.source_line == 10
+    assert logged.meta.source_func == "func"
 
 
 def test_e03_log_event_uses_not_defined_namespace_when_context_namespace_missing() -> None:
@@ -633,10 +732,10 @@ def test_e03_log_event_uses_not_defined_namespace_when_context_namespace_missing
 
     logged = sink.events[0]
 
-    assert logged.event_namespace == "<not defined>"
+    assert logged.meta.event_namespace == "<not defined>"
 
 
-def test_e04_log_event_passes_payload_verbatim() -> None:
+def test_e04_log_event_normalizes_payload_by_default() -> None:
     sink = make_sink()
     ctx = make_root_context(log_sink=sink)
     payload = {"x": object()}
@@ -646,6 +745,102 @@ def test_e04_log_event_passes_payload_verbatim() -> None:
         level=LogLevel.INFO,
         payload=payload,
     )
+
+    assert sink.events[0].payload is not payload
+    assert sink.events[0].payload == {"x": "<object>"}
+
+
+def test_e05_log_event_can_skip_payload_normalization() -> None:
+    sink = make_sink()
+    ctx = make_root_context(log_sink=sink)
+    payload = {"x": object()}
+
+    ctx.log_event(
+        event="event.x",
+        level=LogLevel.INFO,
+        payload=payload,
+        skip_payload_normalization=True,
+    )
+
+    assert sink.events[0].payload is payload
+
+
+def test_e06_policy_meta_and_logged_event_meta_are_same_object() -> None:
+    sink = make_sink()
+    policy = RecordingEventPolicy(enabled=True)
+    ctx = make_root_context(
+        log_sink=sink,
+        event_policy=policy,
+    )
+
+    ctx.log_event(
+        event="event.x",
+        level=LogLevel.INFO,
+        payload={"x": 1},
+    )
+
+    assert len(policy.checked_events) == 1
+    assert len(sink.events) == 1
+    assert sink.events[0].meta is policy.checked_events[0]
+
+
+def test_e07_log_event_payload_normalization_uses_log_adapter_resolver() -> None:
+    sink = make_sink()
+    ctx = make_root_context(log_sink=sink)
+    ctx.set_log_adapter_resolver(make_user_resolver)
+
+    ctx.log_event(
+        event="event.x",
+        level=LogLevel.INFO,
+        payload={"user": User("alice")},
+    )
+
+    assert sink.events[0].payload == {
+        "user": {
+            "kind": "user",
+            "name": "alice",
+            "verbosity_level": "NORMAL",
+        }
+    }
+
+
+def test_e08_emit_log_event_bypasses_event_policy() -> None:
+    sink = make_sink()
+    policy = RecordingEventPolicy(enabled=False)
+    ctx = make_root_context(
+        log_sink=sink,
+        event_policy=policy,
+    )
+
+    meta = make_log_event_meta(event_name="event.x")
+    event = LogEvent(
+        level=LogLevel.INFO,
+        meta=meta,
+        event_type="manual",
+        timestamp=time.time(),
+        payload={"x": 1},
+    )
+
+    ctx.emit_log_event(event)
+
+    assert policy.checked_events == []
+    assert sink.events == [event]
+
+
+def test_e09_emit_log_event_does_not_normalize_payload() -> None:
+    sink = make_sink()
+    ctx = make_root_context(log_sink=sink)
+    payload = {"x": object()}
+
+    event = LogEvent(
+        level=LogLevel.INFO,
+        meta=make_log_event_meta(event_name="event.x"),
+        event_type="manual",
+        timestamp=time.time(),
+        payload=payload,
+    )
+
+    ctx.emit_log_event(event)
 
     assert sink.events[0].payload is payload
 
@@ -663,13 +858,13 @@ def assert_single_logged_event(
     logged = sink.events[0]
 
     assert logged.level is expected_level
-    assert logged.event_namespace == "ns"
-    assert logged.event_name == "event.x"
+    assert logged.meta.event_namespace == "ns"
+    assert logged.meta.event_name == "event.x"
     assert logged.event_type == "type"
-    assert logged.entity_id == "id"
-    assert logged.source_path == "path"
-    assert logged.source_line == 123
-    assert logged.source_func == "func"
+    assert logged.meta.entity_id == "id"
+    assert logged.meta.source_path == "path"
+    assert logged.meta.source_line == 123
+    assert logged.meta.source_func == "func"
     assert logged.payload == {"x": 1}
 
 
@@ -790,7 +985,7 @@ def test_g03_log_sink_error_print_stderr_policy_prints_once(
 
     captured = capsys.readouterr()
 
-    assert captured.err.count("LogContext.log_event() failed") == 1
+    assert captured.err.count("LogContext log event failed") == 1
 
 
 def test_g04_successful_log_resets_printed_error_flag(capsys: pytest.CaptureFixture[str]) -> None:
@@ -812,7 +1007,7 @@ def test_g04_successful_log_resets_printed_error_flag(capsys: pytest.CaptureFixt
 
     captured = capsys.readouterr()
 
-    assert captured.err.count("LogContext.log_event() failed") == 2
+    assert captured.err.count("LogContext log event failed") == 2
 
 
 # ---------- H: error payload building ----------
@@ -1257,7 +1452,7 @@ def test_l02_concurrent_log_event_and_policy_updates_do_not_fail() -> None:
     assert errors == []
 
     for event in sink.events:
-        assert event.event_name == "event.x"
+        assert event.meta.event_name == "event.x"
         assert event.payload == {"x": 1}
 
 

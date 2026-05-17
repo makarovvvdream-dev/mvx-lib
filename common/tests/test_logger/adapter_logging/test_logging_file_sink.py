@@ -11,7 +11,7 @@ import time
 
 import pytest
 
-from mvx.common.logger.models import LogEvent, LogLevel
+from mvx.common.logger.models import LogEvent, LogEventMeta, LogLevel
 from mvx.common.logger.asyncio_log_sink import AsyncioLogSinkError, AsyncioLogSinkState
 
 
@@ -28,27 +28,29 @@ from mvx.common.logger.adapter_logging.logging_file_sink import (
 def make_event(
     *,
     level: int = logging.INFO,
-    event_namespace: str = "mvx.test",
+    event_namespace: str | None = "mvx.test",
     event_name: str = "event.done",
-    event_type: str = "operation",
+    event_type: str | None = "operation",
     timestamp: float = 1_700_000_000.123,
-    entity_id: str = "entity-1",
+    entity_id: str | None = "entity-1",
     payload: Mapping[str, Any] | None = None,
-    source_path: str = "/tmp/source.py",
-    source_line: int = 42,
-    source_func: str = "run",
+    source_path: str | None = "/tmp/source.py",
+    source_line: int | None = 42,
+    source_func: str | None = "run",
 ) -> LogEvent:
     return LogEvent(
         level=level,
-        event_namespace=event_namespace,
-        event_name=event_name,
+        meta=LogEventMeta(
+            event_namespace=event_namespace,
+            event_name=event_name,
+            entity_id=entity_id,
+            source_path=source_path,
+            source_line=source_line,
+            source_func=source_func,
+        ),
         event_type=event_type,
         timestamp=timestamp,
-        entity_id=entity_id,
         payload=payload if payload is not None else {"result": "ok"},
-        source_path=source_path,
-        source_line=source_line,
-        source_func=source_func,
     )
 
 
@@ -470,6 +472,57 @@ def test_c08_multiple_events_are_written_in_order(tmp_path: pathlib.Path) -> Non
             "mvx.test.entity-1.second [operation]",
             "mvx.test.entity-1.third [operation]",
         ]
+    finally:
+        terminate_safely(terminator)
+
+
+def test_c09_log_event_with_missing_optional_fields_is_written(tmp_path: pathlib.Path) -> None:
+    file_path = tmp_path / "app.log"
+    sink, terminator = create_file_sink(file_path)
+
+    try:
+        sink.log(
+            make_event(
+                event_namespace=None,
+                entity_id=None,
+                event_type=None,
+                source_path=None,
+                source_line=None,
+                source_func=None,
+            )
+        )
+
+        text = wait_for_file_text(file_path, "event.done")
+
+        assert "event.done" in text
+    finally:
+        terminate_safely(terminator)
+
+
+def test_c10_log_event_with_missing_source_fields_uses_fallbacks(tmp_path: pathlib.Path) -> None:
+    file_path = tmp_path / "app.log"
+    config = make_config(
+        file_path,
+        log_format="%(pathname)s:%(lineno)d:%(funcName)s:%(message)s",
+    )
+
+    sink, terminator = create_file_sink(file_path, config=config)
+
+    try:
+        sink.log(
+            make_event(
+                source_path=None,
+                source_line=None,
+                source_func=None,
+            )
+        )
+
+        text = wait_for_file_text(
+            file_path,
+            "<not defined>:-1:<not defined>:mvx.test.entity-1.event.done [operation]",
+        )
+
+        assert "<not defined>:-1:<not defined>:" in text
     finally:
         terminate_safely(terminator)
 

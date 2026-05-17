@@ -110,7 +110,7 @@ ctx.log_info_event(
 )
 ```
 
-The logging context receives the `app.started` event with its payload, passes it to the current sink, and the sink delivers the event to `stderr`.
+The logging context receives the `app.started` event with its payload, checks whether the event is enabled, prepares the final `LogEvent`, and passes it to the current sink. The sink then delivers the event to `stderr`.
 
 As a result, we see the line:
 
