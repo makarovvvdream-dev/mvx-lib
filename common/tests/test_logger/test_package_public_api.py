@@ -13,7 +13,6 @@ from mvx.common.logger import (
     LogSinkDescriptor,
     LogSinkConfigurationConflictError,
     LogSinkIsInUseError,
-    LogVerbosityLevel,
 )
 
 
@@ -170,20 +169,17 @@ def test_b03_configure_log_context_applies_sink_to_existing_context() -> None:
     assert ctx.log_sink is sink
 
 
-def test_b04_configure_log_context_applies_runtime_settings_to_existing_context() -> None:
+def test_b04_configure_log_context_applies_payload_processor_to_existing_context() -> None:
     ctx = logger_pack.configure_log_context("mvx.test")
+    payload_processor = logger_pack.LogPayloadProcessor(max_items=3)
 
     same_ctx = logger_pack.configure_log_context(
         "mvx.test",
-        verbosity_level=LogVerbosityLevel.MAXIMUM,
-        max_str_len=10,
-        max_items=3,
+        payload_processor=payload_processor,
     )
 
     assert same_ctx is ctx
-    assert ctx.verbosity_level == LogVerbosityLevel.MAXIMUM.value
-    assert ctx.max_str_len == 10
-    assert ctx.max_items == 3
+    assert ctx.payload_processor is payload_processor
 
 
 def test_b05_child_context_inherits_parent_sink() -> None:

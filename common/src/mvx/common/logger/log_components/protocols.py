@@ -2,7 +2,7 @@
 from __future__ import annotations
 from typing import Any, Mapping, Protocol, runtime_checkable
 
-from ..models import LogLevel, LogEvent, LogEventMeta
+from ..models import LogEvent, LogEventMeta
 
 # ---- LogContextProto ---------------------------------------------------------------------
 
@@ -24,17 +24,15 @@ class LogContextProto(Protocol):
         """
         ...
 
-    @property
-    def verbosity_level(self) -> str:
+    def get_plain_verbosity_level(self) -> str | None:
         """
-        Retrieves the current verbosity level setting for the payload.
+        Retrieves the verbosity level in plain text format.
 
-        This property fetches and returns the current verbosity level that
-        determines the detail level or granularity of information included
-        in the payload.
+        This method is used to fetch the verbosity level in its plain text representation
+        if it is set. If the verbosity level is not specified, it returns None.
 
-        :return: The verbosity level of the payload.
-        :rtype: str
+        :return: The verbosity level as a string if set, or None if not specified.
+        :rtype: str | None
         """
         ...
 

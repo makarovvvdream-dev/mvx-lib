@@ -7,7 +7,7 @@ from mvx.common.logger import (
     FileLogSink,
     LogContext,
     LogLevel,
-    LogVerbosityLevel,
+    LogPayloadProcessor,
     LoggingFileConfig,
 )
 
@@ -29,7 +29,7 @@ def test_a01_manual_root_context_can_log_to_directly_created_file_sink(tmp_path:
         root = LogContext(
             namespace="manual",
             log_sink=sink,
-            verbosity_level=LogVerbosityLevel.NORMAL,
+            payload_processor=LogPayloadProcessor(),
         )
 
         root.log_event(
@@ -64,7 +64,7 @@ def test_a02_manual_child_context_inherits_parent_file_sink(tmp_path: Path) -> N
         root = LogContext(
             namespace="manual",
             log_sink=sink,
-            verbosity_level=LogVerbosityLevel.NORMAL,
+            payload_processor=LogPayloadProcessor(),
         )
         child = LogContext(
             namespace="manual.child",
@@ -114,7 +114,7 @@ def test_a03_manual_leaf_context_can_override_parent_sink(tmp_path: Path) -> Non
         root = LogContext(
             namespace="manual",
             log_sink=root_sink,
-            verbosity_level=LogVerbosityLevel.NORMAL,
+            payload_processor=LogPayloadProcessor(),
         )
         parent = LogContext(
             namespace="manual.parent",
@@ -180,7 +180,7 @@ def test_a04_manual_context_can_be_used_by_log_invocation_without_package_regist
         ctx = LogContext(
             namespace="manual.invocation",
             log_sink=sink,
-            verbosity_level=LogVerbosityLevel.NORMAL,
+            payload_processor=LogPayloadProcessor(),
         )
 
         from mvx.common.logger import log_invocation

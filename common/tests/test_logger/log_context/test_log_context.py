@@ -2,29 +2,27 @@
 
 from __future__ import annotations
 
-import sys
 import threading
 import time
-from collections.abc import Callable
 from typing import Any, cast
+from collections.abc import Mapping
 
 import pytest
 
+# noinspection PyProtectedMember
 from mvx.common.logger.log_context.log_context import (
-    DEFAULT_MAX_ITEMS,
-    DEFAULT_MAX_STR_LEN,
     ERR_LOGGED_FLAG,
     LogContext,
     LogErrorHandlingPolicy,
-    LogVerbosityLevel,
 )
 from mvx.common.logger.errors import LogContextResetError, LogContextUnableToLog
 
 from mvx.common.logger.models import (
     LogEvent,
     LogEventMeta,
-    LogEventPolicy,
+    LogEventPolicyProto,
     LogLevel,
+    LogPayloadProcessorProto,
     LogSinkProto,
 )
 
@@ -51,9 +49,32 @@ class RecordingEventPolicy:
         return self.enabled
 
 
-class User:
-    def __init__(self, name: str) -> None:
-        self.name = name
+class RecordingPayloadProcessor:
+    def __init__(self) -> None:
+        self.normalize_payload_calls: list[tuple[Mapping[str, Any], bool]] = []
+        self.normalize_value_calls: list[tuple[Any, bool]] = []
+
+    def normalize_payload(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        unbounded: bool = False,
+    ) -> dict[str, Any]:
+        self.normalize_payload_calls.append((payload, unbounded))
+        return {"normalized_payload": True}
+
+    def normalize_value_for_log(
+        self,
+        value: Any,
+        *,
+        unbounded: bool = False,
+    ) -> str | int | float | bool | bytes | dict[str, Any] | list[Any] | None:
+        self.normalize_value_calls.append((value, unbounded))
+        return {"normalized_value": True}
+
+    def get_plain_verbosity_level(self) -> str | None:
+        _ = self
+        return "NORMAL"
 
 
 class ExplodingPayloadProvider:
@@ -70,20 +91,19 @@ def make_root_context(
     namespace: str | None = "test.ns",
     log_sink: RecordingLogSink | None = None,
     event_policy: RecordingEventPolicy | None = None,
-    verbosity_level: LogVerbosityLevel = LogVerbosityLevel.NORMAL,
-    max_str_len: int | None = None,
-    max_items: int | None = None,
+    payload_processor: LogPayloadProcessorProto | None = None,
     log_error_handling_policy: LogErrorHandlingPolicy | None = None,
 ) -> LogContext:
     sink = log_sink if log_sink is not None else make_sink()
 
+    if payload_processor is None:
+        payload_processor = RecordingPayloadProcessor()
+
     return LogContext(
         namespace=namespace,
         log_sink=cast(LogSinkProto, sink),
-        event_policy=cast(LogEventPolicy | None, event_policy),
-        verbosity_level=verbosity_level,
-        max_str_len=max_str_len,
-        max_items=max_items,
+        event_policy=cast(LogEventPolicyProto | None, event_policy),
+        payload_processor=payload_processor,
         log_error_handling_policy=log_error_handling_policy,
     )
 
@@ -94,32 +114,17 @@ def make_child_context(
     namespace: str | None = "child.ns",
     log_sink: RecordingLogSink | None = None,
     event_policy: RecordingEventPolicy | None = None,
-    verbosity_level: LogVerbosityLevel | None = None,
-    max_str_len: int | None = None,
-    max_items: int | None = None,
+    payload_processor: LogPayloadProcessorProto | None = None,
     log_error_handling_policy: LogErrorHandlingPolicy | None = None,
 ) -> LogContext:
     return LogContext(
         namespace=namespace,
         parent=parent,
         log_sink=cast(LogSinkProto | None, log_sink),
-        event_policy=cast(LogEventPolicy | None, event_policy),
-        verbosity_level=verbosity_level,
-        max_str_len=max_str_len,
-        max_items=max_items,
+        event_policy=cast(LogEventPolicyProto | None, event_policy),
+        payload_processor=payload_processor,
         log_error_handling_policy=log_error_handling_policy,
     )
-
-
-def make_user_resolver(value: Any) -> Callable[[Any, str], dict[str, Any]] | None:
-    if isinstance(value, User):
-        return lambda obj, verbosity_level: {
-            "kind": "user",
-            "name": obj.name,
-            "verbosity_level": verbosity_level,
-        }
-
-    return None
 
 
 def make_log_event_meta(
@@ -141,46 +146,44 @@ def make_log_event_meta(
     )
 
 
+def make_log_context_untyped(**kwargs: Any) -> LogContext:
+    return cast(Any, LogContext)(**kwargs)
+
+
 # ---------- A: constructor / root context validation ----------
 
 
 def test_a01_root_context_requires_log_sink() -> None:
     with pytest.raises(ValueError):
-        # noinspection PyArgumentList
-        LogContext(
-            verbosity_level=LogVerbosityLevel.NORMAL,
+        make_log_context_untyped(
+            payload_processor=RecordingPayloadProcessor(),
         )
 
 
-def test_a02_root_context_requires_verbosity_level() -> None:
+def test_a02_root_context_requires_payload_processor() -> None:
     with pytest.raises(ValueError):
-        # noinspection PyArgumentList
-        LogContext(
+        make_log_context_untyped(
             log_sink=cast(LogSinkProto, make_sink()),
         )
 
 
-def test_a03_root_context_uses_default_limits_and_error_policy() -> None:
+def test_a03_root_context_uses_default_error_policy() -> None:
     ctx = make_root_context(
-        max_str_len=None,
-        max_items=None,
         log_error_handling_policy=None,
     )
 
-    assert ctx.max_str_len == DEFAULT_MAX_STR_LEN
-    assert ctx.max_items == DEFAULT_MAX_ITEMS
     assert ctx.log_error_handling_policy is LogErrorHandlingPolicy.RAISE
 
 
-def test_a04_root_context_accepts_custom_limits_and_error_policy() -> None:
+def test_a04_root_context_accepts_custom_payload_processor_and_error_policy() -> None:
+    payload_processor = RecordingPayloadProcessor()
+
     ctx = make_root_context(
-        max_str_len=50,
-        max_items=5,
+        payload_processor=payload_processor,
         log_error_handling_policy=LogErrorHandlingPolicy.IGNORE,
     )
 
-    assert ctx.max_str_len == 50
-    assert ctx.max_items == 5
+    assert ctx.payload_processor is payload_processor
     assert ctx.log_error_handling_policy is LogErrorHandlingPolicy.IGNORE
 
 
@@ -201,7 +204,7 @@ def test_a07_non_string_namespace_fails() -> None:
         LogContext(
             namespace=cast(Any, 123),
             log_sink=cast(LogSinkProto, make_sink()),
-            verbosity_level=LogVerbosityLevel.NORMAL,
+            payload_processor=RecordingPayloadProcessor(),
         )
 
 
@@ -232,9 +235,9 @@ def test_a10_child_context_reports_not_root_and_parent() -> None:
 
 def test_b01_invalid_log_sink_type_fails() -> None:
     with pytest.raises(TypeError):
-        LogContext(
-            log_sink=cast(Any, object()),
-            verbosity_level=LogVerbosityLevel.NORMAL,
+        make_log_context_untyped(
+            log_sink=object(),
+            payload_processor=RecordingPayloadProcessor(),
         )
 
 
@@ -243,61 +246,23 @@ def test_b02_invalid_event_policy_type_fails() -> None:
         LogContext(
             log_sink=cast(LogSinkProto, make_sink()),
             event_policy=cast(Any, object()),
-            verbosity_level=LogVerbosityLevel.NORMAL,
+            payload_processor=RecordingPayloadProcessor(),
         )
 
 
-def test_b03_invalid_verbosity_level_type_fails() -> None:
+def test_b03_invalid_payload_processor_type_fails() -> None:
     with pytest.raises(TypeError):
         LogContext(
             log_sink=cast(LogSinkProto, make_sink()),
-            verbosity_level=cast(Any, "NORMAL"),
+            payload_processor=cast(Any, object()),
         )
 
 
-def test_b04_invalid_max_str_len_type_fails() -> None:
+def test_b04_invalid_log_error_handling_policy_type_fails() -> None:
     with pytest.raises(TypeError):
         LogContext(
             log_sink=cast(LogSinkProto, make_sink()),
-            verbosity_level=LogVerbosityLevel.NORMAL,
-            max_str_len=cast(Any, "200"),
-        )
-
-
-@pytest.mark.parametrize("value", [0, -1])
-def test_b05_invalid_max_str_len_value_fails(value: int) -> None:
-    with pytest.raises(ValueError):
-        LogContext(
-            log_sink=cast(LogSinkProto, make_sink()),
-            verbosity_level=LogVerbosityLevel.NORMAL,
-            max_str_len=value,
-        )
-
-
-def test_b06_invalid_max_items_type_fails() -> None:
-    with pytest.raises(TypeError):
-        LogContext(
-            log_sink=cast(LogSinkProto, make_sink()),
-            verbosity_level=LogVerbosityLevel.NORMAL,
-            max_items=cast(Any, "10"),
-        )
-
-
-@pytest.mark.parametrize("value", [0, -1])
-def test_b07_invalid_max_items_value_fails(value: int) -> None:
-    with pytest.raises(ValueError):
-        LogContext(
-            log_sink=cast(LogSinkProto, make_sink()),
-            verbosity_level=LogVerbosityLevel.NORMAL,
-            max_items=value,
-        )
-
-
-def test_b08_invalid_log_error_handling_policy_type_fails() -> None:
-    with pytest.raises(TypeError):
-        LogContext(
-            log_sink=cast(LogSinkProto, make_sink()),
-            verbosity_level=LogVerbosityLevel.NORMAL,
+            payload_processor=RecordingPayloadProcessor(),
             log_error_handling_policy=cast(Any, "RAISE"),
         )
 
@@ -333,112 +298,78 @@ def test_c03_child_reset_log_sink_restores_parent_sink() -> None:
 
 
 def test_c04_root_reset_log_sink_fails() -> None:
-    parent = make_root_context()
+    root = make_root_context()
 
     with pytest.raises(LogContextResetError):
-        parent.reset_log_sink()
+        root.reset_log_sink()
 
 
-def test_c05_child_inherits_verbosity_level() -> None:
-    parent = make_root_context(verbosity_level=LogVerbosityLevel.MAXIMUM)
+def test_c05_child_inherits_payload_processor_from_parent() -> None:
+    payload_processor = RecordingPayloadProcessor()
+    parent = make_root_context(payload_processor=payload_processor)
     child = make_child_context(parent)
 
-    assert child.verbosity_level == LogVerbosityLevel.MAXIMUM.value
+    assert child.payload_processor is payload_processor
 
 
-def test_c06_child_can_override_verbosity_level() -> None:
-    parent = make_root_context(verbosity_level=LogVerbosityLevel.NORMAL)
-    child = make_child_context(parent, verbosity_level=LogVerbosityLevel.MINIMAL)
+def test_c06_child_can_override_payload_processor() -> None:
+    parent_processor = RecordingPayloadProcessor()
+    child_processor = RecordingPayloadProcessor()
 
-    assert child.verbosity_level == LogVerbosityLevel.MINIMAL.value
+    parent = make_root_context(payload_processor=parent_processor)
+    child = make_child_context(parent, payload_processor=child_processor)
 
-
-def test_c07_child_reset_verbosity_level_restores_parent_value() -> None:
-    parent = make_root_context(verbosity_level=LogVerbosityLevel.MAXIMUM)
-    child = make_child_context(parent, verbosity_level=LogVerbosityLevel.MINIMAL)
-
-    child.reset_verbosity_level()
-
-    assert child.verbosity_level == LogVerbosityLevel.MAXIMUM.value
+    assert child.payload_processor is child_processor
 
 
-def test_c08_root_reset_verbosity_level_fails() -> None:
-    parent = make_root_context()
+def test_c07_child_reset_payload_processor_restores_parent_processor() -> None:
+    parent_processor = RecordingPayloadProcessor()
+    child_processor = RecordingPayloadProcessor()
+
+    parent = make_root_context(payload_processor=parent_processor)
+    child = make_child_context(parent, payload_processor=child_processor)
+
+    child.reset_payload_processor()
+
+    assert child.payload_processor is parent.payload_processor
+
+
+def test_c08_root_reset_payload_processor_fails() -> None:
+    root = make_root_context()
 
     with pytest.raises(LogContextResetError):
-        parent.reset_verbosity_level()
+        root.reset_payload_processor()
 
 
-def test_c09_child_inherits_max_str_len() -> None:
-    parent = make_root_context(max_str_len=50)
-    child = make_child_context(parent)
+def test_c09_grandchild_inherits_nearest_payload_processor_override() -> None:
+    root_processor = RecordingPayloadProcessor()
+    branch_processor = RecordingPayloadProcessor()
 
-    assert child.max_str_len == 50
+    root = make_root_context(payload_processor=root_processor)
+    branch = make_child_context(root, payload_processor=branch_processor)
+    leaf = make_child_context(branch)
 
-
-def test_c10_child_can_override_max_str_len() -> None:
-    parent = make_root_context(max_str_len=50)
-    child = make_child_context(parent, max_str_len=10)
-
-    assert child.max_str_len == 10
+    assert leaf.payload_processor is branch_processor
 
 
-def test_c11_child_reset_max_str_len_restores_parent_value() -> None:
-    parent = make_root_context(max_str_len=50)
-    child = make_child_context(parent, max_str_len=10)
+def test_c10_grandchild_falls_back_to_root_payload_processor_when_no_override_exists() -> None:
+    root_processor = RecordingPayloadProcessor()
 
-    child.reset_max_str_len()
+    root = make_root_context(payload_processor=root_processor)
+    branch = make_child_context(root)
+    leaf = make_child_context(branch)
 
-    assert child.max_str_len == 50
-
-
-def test_c12_root_reset_max_str_len_restores_default() -> None:
-    root = make_root_context(max_str_len=50)
-
-    root.reset_max_str_len()
-
-    assert root.max_str_len == DEFAULT_MAX_STR_LEN
+    assert leaf.payload_processor is root_processor
 
 
-def test_c13_child_inherits_max_items() -> None:
-    parent = make_root_context(max_items=5)
-    child = make_child_context(parent)
-
-    assert child.max_items == 5
-
-
-def test_c14_child_can_override_max_items() -> None:
-    parent = make_root_context(max_items=5)
-    child = make_child_context(parent, max_items=2)
-
-    assert child.max_items == 2
-
-
-def test_c15_child_reset_max_items_restores_parent_value() -> None:
-    parent = make_root_context(max_items=5)
-    child = make_child_context(parent, max_items=2)
-
-    child.reset_max_items()
-
-    assert child.max_items == 5
-
-
-def test_c16_root_reset_max_items_restores_default() -> None:
-    root = make_root_context(max_items=5)
-
-    root.reset_max_items()
-
-    assert root.max_items == DEFAULT_MAX_ITEMS
-
-
-def test_c17_child_inherits_log_error_handling_policy() -> None:
+def test_c11_child_inherits_log_error_handling_policy() -> None:
     parent = make_root_context(log_error_handling_policy=LogErrorHandlingPolicy.IGNORE)
     child = make_child_context(parent)
 
     assert child.log_error_handling_policy is LogErrorHandlingPolicy.IGNORE
 
 
-def test_c18_child_can_override_log_error_handling_policy() -> None:
+def test_c12_child_can_override_log_error_handling_policy() -> None:
     parent = make_root_context(log_error_handling_policy=LogErrorHandlingPolicy.RAISE)
     child = make_child_context(
         parent,
@@ -448,7 +379,7 @@ def test_c18_child_can_override_log_error_handling_policy() -> None:
     assert child.log_error_handling_policy is LogErrorHandlingPolicy.PRINT_STDERR
 
 
-def test_c19_child_reset_log_error_handling_policy_restores_parent_value() -> None:
+def test_c13_child_reset_log_error_handling_policy_restores_parent_value() -> None:
     parent = make_root_context(log_error_handling_policy=LogErrorHandlingPolicy.IGNORE)
     child = make_child_context(
         parent,
@@ -460,55 +391,11 @@ def test_c19_child_reset_log_error_handling_policy_restores_parent_value() -> No
     assert child.log_error_handling_policy is LogErrorHandlingPolicy.IGNORE
 
 
-def test_c20_root_reset_log_error_handling_policy_fails() -> None:
+def test_c14_root_reset_log_error_handling_policy_fails() -> None:
     root = make_root_context()
 
     with pytest.raises(LogContextResetError):
         root.reset_log_error_handling_policy()
-
-
-def test_c21_child_inherits_log_adapter_resolver() -> None:
-    parent = make_root_context()
-    parent.set_log_adapter_resolver(make_user_resolver)
-    child = make_child_context(parent)
-
-    assert child.log_adapter_resolver is make_user_resolver
-
-
-def test_c22_child_can_override_log_adapter_resolver() -> None:
-    parent = make_root_context()
-    parent.set_log_adapter_resolver(make_user_resolver)
-
-    def child_resolver(value: Any) -> None:
-        _ = value
-        return None
-
-    child = make_child_context(parent)
-    child.set_log_adapter_resolver(child_resolver)
-
-    assert child.log_adapter_resolver is child_resolver
-
-
-def test_c23_child_reset_log_adapter_resolver_restores_parent_resolver() -> None:
-    parent = make_root_context()
-    parent.set_log_adapter_resolver(make_user_resolver)
-
-    def child_resolver(value: Any) -> None:
-        _ = value
-        return None
-
-    child = make_child_context(parent)
-    child.set_log_adapter_resolver(child_resolver)
-
-    child.reset_log_adapter_resolver()
-
-    assert child.log_adapter_resolver is make_user_resolver
-
-
-def test_c24_root_log_adapter_resolver_is_none_by_default() -> None:
-    root = make_root_context()
-
-    assert root.log_adapter_resolver is None
 
 
 # ---------- D: event policy semantics ----------
@@ -536,7 +423,7 @@ def test_d03_set_event_policy_is_used() -> None:
     ctx = make_root_context()
     event = make_log_event_meta(event_name="event.x")
 
-    ctx.set_event_policy(cast(LogEventPolicy, policy))
+    ctx.set_event_policy(cast(LogEventPolicyProto, policy))
 
     assert ctx.event_policy is policy
     assert ctx.is_event_enabled(event) is False
@@ -602,9 +489,11 @@ def test_d07_enabled_event_is_logged() -> None:
 def test_d08_event_policy_receives_log_event_meta_before_payload_normalization() -> None:
     sink = make_sink()
     policy = RecordingEventPolicy(enabled=True)
+    processor = RecordingPayloadProcessor()
     ctx = make_root_context(
         log_sink=sink,
         event_policy=policy,
+        payload_processor=cast(LogPayloadProcessorProto, processor),
     )
     payload = {"x": object()}
 
@@ -638,8 +527,8 @@ def test_d08_event_policy_receives_log_event_meta_before_payload_normalization()
     assert logged.level is LogLevel.WARNING
     assert logged.meta is checked
     assert logged.event_type == "operation"
-    assert logged.payload is not payload
-    assert logged.payload == {"x": "<object>"}
+    assert logged.payload == {"normalized_payload": True}
+    assert processor.normalize_payload_calls == [(payload, False)]
 
 
 def test_d09_disabled_event_does_not_normalize_payload() -> None:
@@ -685,7 +574,7 @@ def test_e01_log_event_builds_log_event_with_defaults() -> None:
     assert logged.event_type is None
     assert before <= logged.timestamp <= after
     assert logged.meta.entity_id is None
-    assert logged.payload == {"x": 1}
+    assert logged.payload == {"normalized_payload": True}
     assert logged.meta.source_path is None
     assert logged.meta.source_line is None
     assert logged.meta.source_func is None
@@ -714,7 +603,7 @@ def test_e02_log_event_uses_explicit_metadata() -> None:
     assert logged.meta.event_name == "event.x"
     assert logged.event_type == "operation"
     assert logged.meta.entity_id == "entity-1"
-    assert logged.payload == {"x": 1}
+    assert logged.payload == {"normalized_payload": True}
     assert logged.meta.source_path == "/tmp/a.py"
     assert logged.meta.source_line == 10
     assert logged.meta.source_func == "func"
@@ -737,7 +626,11 @@ def test_e03_log_event_uses_not_defined_namespace_when_context_namespace_missing
 
 def test_e04_log_event_normalizes_payload_by_default() -> None:
     sink = make_sink()
-    ctx = make_root_context(log_sink=sink)
+    processor = RecordingPayloadProcessor()
+    ctx = make_root_context(
+        log_sink=sink,
+        payload_processor=cast(LogPayloadProcessorProto, processor),
+    )
     payload = {"x": object()}
 
     ctx.log_event(
@@ -746,8 +639,8 @@ def test_e04_log_event_normalizes_payload_by_default() -> None:
         payload=payload,
     )
 
-    assert sink.events[0].payload is not payload
-    assert sink.events[0].payload == {"x": "<object>"}
+    assert sink.events[0].payload == {"normalized_payload": True}
+    assert processor.normalize_payload_calls == [(payload, False)]
 
 
 def test_e05_log_event_can_skip_payload_normalization() -> None:
@@ -784,24 +677,23 @@ def test_e06_policy_meta_and_logged_event_meta_are_same_object() -> None:
     assert sink.events[0].meta is policy.checked_events[0]
 
 
-def test_e07_log_event_payload_normalization_uses_log_adapter_resolver() -> None:
+def test_e07_log_event_payload_normalization_uses_effective_payload_processor() -> None:
     sink = make_sink()
-    ctx = make_root_context(log_sink=sink)
-    ctx.set_log_adapter_resolver(make_user_resolver)
+    processor = RecordingPayloadProcessor()
+    ctx = make_root_context(
+        log_sink=sink,
+        payload_processor=cast(LogPayloadProcessorProto, processor),
+    )
+    payload = {"value": object()}
 
     ctx.log_event(
         event="event.x",
         level=LogLevel.INFO,
-        payload={"user": User("alice")},
+        payload=payload,
     )
 
-    assert sink.events[0].payload == {
-        "user": {
-            "kind": "user",
-            "name": "alice",
-            "verbosity_level": "NORMAL",
-        }
-    }
+    assert sink.events[0].payload == {"normalized_payload": True}
+    assert processor.normalize_payload_calls == [(payload, False)]
 
 
 def test_e08_emit_log_event_bypasses_event_policy() -> None:
@@ -865,7 +757,7 @@ def assert_single_logged_event(
     assert logged.meta.source_path == "path"
     assert logged.meta.source_line == 123
     assert logged.meta.source_func == "func"
-    assert logged.payload == {"x": 1}
+    assert logged.payload == {"normalized_payload": True}
 
 
 def test_f01_log_debug_event_uses_debug_level() -> None:
@@ -1018,6 +910,7 @@ def test_h01_build_error_payload_uses_to_log_payload_dict() -> None:
 
     class CustomError(Exception):
         def to_log_payload(self) -> dict[str, Any]:
+            _ = self
             return {"kind": "custom", "x": 1}
 
     assert ctx.build_error_payload(CustomError()) == {"kind": "custom", "x": 1}
@@ -1029,6 +922,7 @@ def test_h02_build_error_payload_copies_to_log_payload_result() -> None:
 
     class CustomError(Exception):
         def to_log_payload(self) -> dict[str, Any]:
+            _ = self
             return provided
 
     result = ctx.build_error_payload(CustomError())
@@ -1042,6 +936,7 @@ def test_h03_build_error_payload_ignores_non_dict_to_log_payload() -> None:
 
     class CustomError(Exception):
         def to_log_payload(self) -> list[str]:
+            _ = self
             return ["bad"]
 
     err = CustomError("boom")
@@ -1143,127 +1038,118 @@ def test_i04_mark_error_logged_suppresses_setattr_exception() -> None:
     assert ctx.is_error_logged(err) is False
 
 
-# ---------- J: normalization wrappers ----------
+# ---------- J: payload processor delegation wrappers ----------
 
 
-def test_j01_normalize_primitive_for_log_uses_context_max_str_len() -> None:
-    ctx = make_root_context(max_str_len=3)
-
-    assert ctx.normalize_primitive_for_log("abcdef") == "abc..."
-
-
-def test_j02_normalize_value_for_log_uses_context_limits() -> None:
-    ctx = make_root_context(max_str_len=3, max_items=2)
-
-    result = ctx.normalize_value_for_log(["abcdef", "b", "c"])
-
-    assert result == ["abc...", "b", "... (1 more)"]
-
-
-def test_j03_normalize_value_for_log_unbounded_disables_item_limit() -> None:
-    ctx = make_root_context(max_items=2)
-
-    result = ctx.normalize_value_for_log([1, 2, 3], unbounded=True)
-
-    assert result == [1, 2, 3]
-
-
-def test_j04_normalize_list_for_log_uses_context_limits() -> None:
-    ctx = make_root_context(max_str_len=3, max_items=2)
-
-    result = ctx.normalize_list_for_log(["abcdef", "b", "c"])
-
-    assert result == ["abc...", "b", "... (1 more)"]
-
-
-def test_j05_normalize_list_for_log_unbounded_disables_item_limit() -> None:
-    ctx = make_root_context(max_items=2)
-
-    result = ctx.normalize_list_for_log([1, 2, 3], unbounded=True)
-
-    assert result == [1, 2, 3]
-
-
-def test_j06_normalize_dict_for_log_uses_context_limits() -> None:
-    ctx = make_root_context(max_str_len=3, max_items=2)
-
-    result = ctx.normalize_dict_for_log(
-        {
-            "abcdef": "abcdef",
-            "b": "b",
-            "c": "c",
-        }
+def test_j01_normalize_payload_delegates_to_root_payload_processor() -> None:
+    processor = RecordingPayloadProcessor()
+    ctx = make_root_context(
+        payload_processor=cast(LogPayloadProcessorProto, processor),
     )
+    payload = {"x": object()}
 
-    assert result == {
-        "abc...": "abc...",
-        "b": "b",
-        "__more__": "1 more keys",
-    }
+    result = ctx.normalize_payload(payload)
+
+    assert result == {"normalized_payload": True}
+    assert processor.normalize_payload_calls == [(payload, False)]
 
 
-def test_j07_normalize_dict_for_log_unbounded_disables_item_limit() -> None:
-    ctx = make_root_context(max_items=2)
-
-    result = ctx.normalize_dict_for_log(
-        {
-            "a": 1,
-            "b": 2,
-            "c": 3,
-        },
-        unbounded=True,
+def test_j02_normalize_payload_forwards_unbounded_to_processor() -> None:
+    processor = RecordingPayloadProcessor()
+    ctx = make_root_context(
+        payload_processor=cast(LogPayloadProcessorProto, processor),
     )
+    payload = {"x": object()}
 
-    assert result == {
-        "a": 1,
-        "b": 2,
-        "c": 3,
-    }
+    result = ctx.normalize_payload(payload, unbounded=True)
+
+    assert result == {"normalized_payload": True}
+    assert processor.normalize_payload_calls == [(payload, True)]
 
 
-def test_j08_normalization_uses_inherited_parent_limits() -> None:
-    parent = make_root_context(max_items=2)
+def test_j03_normalize_value_for_log_delegates_to_root_payload_processor() -> None:
+    processor = RecordingPayloadProcessor()
+    ctx = make_root_context(
+        payload_processor=cast(LogPayloadProcessorProto, processor),
+    )
+    value = object()
+
+    result = ctx.normalize_value_for_log(value)
+
+    assert result == {"normalized_value": True}
+    assert processor.normalize_value_calls == [(value, False)]
+
+
+def test_j04_normalize_value_for_log_forwards_unbounded_to_processor() -> None:
+    processor = RecordingPayloadProcessor()
+    ctx = make_root_context(
+        payload_processor=cast(LogPayloadProcessorProto, processor),
+    )
+    value = object()
+
+    result = ctx.normalize_value_for_log(value, unbounded=True)
+
+    assert result == {"normalized_value": True}
+    assert processor.normalize_value_calls == [(value, True)]
+
+
+def test_j05_normalization_uses_inherited_parent_payload_processor() -> None:
+    processor = RecordingPayloadProcessor()
+    parent = make_root_context(
+        payload_processor=cast(LogPayloadProcessorProto, processor),
+    )
     child = make_child_context(parent)
+    value = object()
 
-    result = child.normalize_list_for_log([1, 2, 3])
+    result = child.normalize_value_for_log(value)
 
-    assert result == [1, 2, "... (1 more)"]
-
-
-def test_j09_normalization_uses_child_overrides() -> None:
-    parent = make_root_context(max_items=2)
-    child = make_child_context(parent, max_items=3)
-
-    result = child.normalize_list_for_log([1, 2, 3, 4])
-
-    assert result == [1, 2, 3, "... (1 more)"]
+    assert child.payload_processor is processor
+    assert result == {"normalized_value": True}
+    assert processor.normalize_value_calls == [(value, False)]
 
 
-def test_j10_normalization_uses_log_adapter_resolver() -> None:
-    ctx = make_root_context()
-    ctx.set_log_adapter_resolver(make_user_resolver)
+def test_j06_normalization_uses_child_payload_processor_override() -> None:
+    parent_processor = RecordingPayloadProcessor()
+    child_processor = RecordingPayloadProcessor()
 
-    result = ctx.normalize_value_for_log(User("alice"))
+    parent = make_root_context(
+        payload_processor=cast(LogPayloadProcessorProto, parent_processor),
+    )
+    child = make_child_context(
+        parent,
+        payload_processor=cast(LogPayloadProcessorProto, child_processor),
+    )
+    value = object()
 
-    assert result == {
-        "kind": "user",
-        "name": "alice",
-        "verbosity_level": "NORMAL",
-    }
+    result = child.normalize_value_for_log(value)
+
+    assert child.payload_processor is child_processor
+    assert result == {"normalized_value": True}
+    assert parent_processor.normalize_value_calls == []
+    assert child_processor.normalize_value_calls == [(value, False)]
 
 
-def test_j11_child_normalization_inherits_log_adapter_resolver() -> None:
-    parent = make_root_context()
-    parent.set_log_adapter_resolver(make_user_resolver)
-    child = make_child_context(parent)
+def test_j07_normalization_uses_restored_parent_payload_processor_after_reset() -> None:
+    parent_processor = RecordingPayloadProcessor()
+    child_processor = RecordingPayloadProcessor()
 
-    result = child.normalize_value_for_log(User("alice"))
+    parent = make_root_context(
+        payload_processor=cast(LogPayloadProcessorProto, parent_processor),
+    )
+    child = make_child_context(
+        parent,
+        payload_processor=cast(LogPayloadProcessorProto, child_processor),
+    )
+    value = object()
 
-    assert result == {
-        "kind": "user",
-        "name": "alice",
-        "verbosity_level": "NORMAL",
-    }
+    child.reset_payload_processor()
+
+    result = child.normalize_value_for_log(value)
+
+    assert child.payload_processor is parent_processor
+    assert result == {"normalized_value": True}
+    assert parent_processor.normalize_value_calls == [(value, False)]
+    assert child_processor.normalize_value_calls == []
 
 
 # ---------- K: setter validation ----------
@@ -1297,90 +1183,54 @@ def test_k04_set_event_policy_invalid_type_fails() -> None:
         ctx.set_event_policy(cast(Any, object()))
 
 
-def test_k05_set_verbosity_level_none_fails() -> None:
+def test_k05_set_payload_processor_none_fails() -> None:
     ctx = make_root_context()
 
     with pytest.raises(ValueError):
-        ctx.set_verbosity_level(cast(Any, None))
+        ctx.set_payload_processor(cast(Any, None))
 
 
-def test_k06_set_verbosity_level_invalid_type_fails() -> None:
+def test_k06_set_payload_processor_invalid_type_fails() -> None:
     ctx = make_root_context()
 
     with pytest.raises(TypeError):
-        ctx.set_verbosity_level(cast(Any, "NORMAL"))
+        ctx.set_payload_processor(cast(Any, object()))
 
 
-def test_k07_set_max_str_len_none_fails() -> None:
+def test_k07_set_payload_processor_accepts_valid_processor() -> None:
     ctx = make_root_context()
+    processor = RecordingPayloadProcessor()
+    value = object()
 
-    with pytest.raises(ValueError):
-        ctx.set_max_str_len(cast(Any, None))
+    ctx.set_payload_processor(cast(LogPayloadProcessorProto, processor))
 
+    result = ctx.normalize_value_for_log(value)
 
-def test_k08_set_max_str_len_invalid_type_fails() -> None:
-    ctx = make_root_context()
-
-    with pytest.raises(TypeError):
-        ctx.set_max_str_len(cast(Any, "200"))
-
-
-@pytest.mark.parametrize("value", [0, -1])
-def test_k09_set_max_str_len_invalid_value_fails(value: int) -> None:
-    ctx = make_root_context()
-
-    with pytest.raises(ValueError):
-        ctx.set_max_str_len(value)
+    assert ctx.payload_processor is processor
+    assert result == {"normalized_value": True}
+    assert processor.normalize_value_calls == [(value, False)]
 
 
-def test_k10_set_max_items_none_fails() -> None:
-    ctx = make_root_context()
-
-    with pytest.raises(ValueError):
-        ctx.set_max_items(cast(Any, None))
-
-
-def test_k11_set_max_items_invalid_type_fails() -> None:
-    ctx = make_root_context()
-
-    with pytest.raises(TypeError):
-        ctx.set_max_items(cast(Any, "10"))
-
-
-@pytest.mark.parametrize("value", [0, -1])
-def test_k12_set_max_items_invalid_value_fails(value: int) -> None:
-    ctx = make_root_context()
-
-    with pytest.raises(ValueError):
-        ctx.set_max_items(value)
-
-
-def test_k13_set_log_adapter_resolver_none_fails() -> None:
-    ctx = make_root_context()
-
-    with pytest.raises(ValueError):
-        ctx.set_log_adapter_resolver(cast(Any, None))
-
-
-def test_k14_set_log_adapter_resolver_non_callable_fails() -> None:
-    ctx = make_root_context()
-
-    with pytest.raises(TypeError):
-        ctx.set_log_adapter_resolver(cast(Any, object()))
-
-
-def test_k15_set_log_error_handling_policy_none_fails() -> None:
+def test_k08_set_log_error_handling_policy_none_fails() -> None:
     ctx = make_root_context()
 
     with pytest.raises(ValueError):
         ctx.set_log_error_handling_policy(cast(Any, None))
 
 
-def test_k16_set_log_error_handling_policy_invalid_type_fails() -> None:
+def test_k09_set_log_error_handling_policy_invalid_type_fails() -> None:
     ctx = make_root_context()
 
     with pytest.raises(TypeError):
         ctx.set_log_error_handling_policy(cast(Any, "RAISE"))
+
+
+def test_k10_set_log_error_handling_policy_accepts_valid_policy() -> None:
+    ctx = make_root_context()
+
+    ctx.set_log_error_handling_policy(LogErrorHandlingPolicy.IGNORE)
+
+    assert ctx.log_error_handling_policy is LogErrorHandlingPolicy.IGNORE
 
 
 # ---------- L: thread-safety smoke tests ----------
@@ -1397,11 +1247,8 @@ def test_l01_concurrent_getters_and_setters_do_not_fail() -> None:
                 _ = ctx.namespace
                 _ = ctx.log_sink
                 _ = ctx.event_policy
-                _ = ctx.verbosity_level
-                _ = ctx.max_str_len
-                _ = ctx.max_items
+                _ = ctx.payload_processor
                 _ = ctx.log_error_handling_policy
-                _ = ctx.log_adapter_resolver
         except BaseException as exc:
             errors.append(exc)
 
@@ -1410,12 +1257,13 @@ def test_l01_concurrent_getters_and_setters_do_not_fail() -> None:
 
     try:
         for index in range(100):
-            ctx.set_max_str_len(index + 1)
-            ctx.set_max_items(index + 1)
-            ctx.set_verbosity_level(LogVerbosityLevel.NORMAL)
+            ctx.set_log_sink(cast(LogSinkProto, make_sink()))
+            ctx.set_event_policy(
+                cast(LogEventPolicyProto, RecordingEventPolicy(enabled=index % 2 == 0))
+            )
+            ctx.reset_event_policy()
+            ctx.set_payload_processor(cast(LogPayloadProcessorProto, RecordingPayloadProcessor()))
             ctx.set_log_error_handling_policy(LogErrorHandlingPolicy.RAISE)
-            ctx.set_log_adapter_resolver(make_user_resolver)
-            ctx.reset_log_adapter_resolver()
     finally:
         stop_reading.set()
         thread.join(timeout=2.0)
@@ -1442,7 +1290,9 @@ def test_l02_concurrent_log_event_and_policy_updates_do_not_fail() -> None:
 
     try:
         for index in range(100):
-            ctx.set_event_policy(cast(LogEventPolicy, RecordingEventPolicy(enabled=index % 2 == 0)))
+            ctx.set_event_policy(
+                cast(LogEventPolicyProto, RecordingEventPolicy(enabled=index % 2 == 0))
+            )
             ctx.reset_event_policy()
     finally:
         stop_logging.set()
@@ -1453,17 +1303,4 @@ def test_l02_concurrent_log_event_and_policy_updates_do_not_fail() -> None:
 
     for event in sink.events:
         assert event.meta.event_name == "event.x"
-        assert event.payload == {"x": 1}
-
-
-# ---------- M: public API / exports ----------
-
-
-def test_m01_module_exports_public_names() -> None:
-    module = sys.modules[LogContext.__module__]
-
-    assert set(module.__all__) == {
-        "LogVerbosityLevel",
-        "LogErrorHandlingPolicy",
-        "LogContext",
-    }
+        assert event.payload == {"normalized_payload": True}

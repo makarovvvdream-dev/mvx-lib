@@ -126,7 +126,6 @@ These fields are optional. `entity_id` and source-code fields are part of event 
 
 Before preparing the final event payload, the context checks the event policy if one is set for that context. The policy receives only event metadata. If the policy rejects the event, the payload is not normalized and the event is not passed to the sink.
 
-Before sending an event, the context checks the event policy if one is set for that context. If the policy rejects the event, it is not passed to the sink.
 
 ## Working with exceptions
 
@@ -292,8 +291,11 @@ payload = {
 ctx.log_info_event(
     event="operation.completed",
     payload=payload,
+    skip_payload_normalization=True,
 )
 ```
+
+Because this payload is already prepared explicitly, normalization is skipped on the logging call itself.
 
 The context provides several helper methods:
 

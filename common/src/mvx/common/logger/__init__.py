@@ -10,15 +10,15 @@ import re
 from .models import (
     LogLevel,
     LogPayloadProvider,
-    LogAdapter,
-    LogAdapterResolver,
     LogEvent,
     LogSinkProto,
     LogSinkDescriptor,
     LogSinkTerminator,
     LogSinkClassProto,
-    LogEventPolicy,
+    LogEventPolicyProto,
+    LogPayloadProcessorProto,
 )
+
 from .helpers import log_internal_error as _log_internal_error
 
 from .errors import (
@@ -36,8 +36,14 @@ from .errors import (
 
 from .log_context import (
     LogContext,
-    LogVerbosityLevel,
     LogErrorHandlingPolicy,
+)
+
+from .log_payload_processor import (
+    LogPayloadProcessor,
+    LogVerbosityLevel,
+    LogAdapter,
+    LogAdapterResolver,
 )
 
 from .log_components import (
@@ -77,14 +83,13 @@ __all__ = (
     # from .models
     "LogLevel",
     "LogPayloadProvider",
-    "LogAdapter",
-    "LogAdapterResolver",
     "LogEvent",
     "LogSinkProto",
     "LogSinkDescriptor",
     "LogSinkTerminator",
     "LogSinkClassProto",
-    "LogEventPolicy",
+    "LogEventPolicyProto",
+    "LogPayloadProcessorProto",
     # from .errors
     "LoggerError",
     "LogContextError",
@@ -98,8 +103,12 @@ __all__ = (
     "LogSinkIsInUseError",
     # from .log_context
     "LogContext",
-    "LogVerbosityLevel",
     "LogErrorHandlingPolicy",
+    # from .log_payload_processor
+    "LogPayloadProcessor",
+    "LogVerbosityLevel",
+    "LogAdapter",
+    "LogAdapterResolver",
     # from .log_components
     "log_invocation",
     "LogContextProto",
@@ -342,10 +351,8 @@ class _LogContextRegistry:
         namespace: str,
         *,
         log_sink: LogSinkProto | None = None,
-        event_policy: LogEventPolicy | None = None,
-        verbosity_level: LogVerbosityLevel | None = None,
-        max_str_len: int | None = None,
-        max_items: int | None = None,
+        event_policy: LogEventPolicyProto | None = None,
+        payload_processor: LogPayloadProcessorProto | None = None,
         log_error_handling_policy: LogErrorHandlingPolicy | None = None,
     ) -> LogContext:
 
@@ -378,14 +385,12 @@ class _LogContextRegistry:
 
             is_leaf = current_namespace == namespace
 
-            context = LogContext(
+            context: LogContext = LogContext(
                 namespace=current_namespace,
                 parent=parent,
                 log_sink=log_sink if is_leaf else None,
                 event_policy=event_policy if is_leaf else None,
-                verbosity_level=verbosity_level if is_leaf else None,
-                max_str_len=max_str_len if is_leaf else None,
-                max_items=max_items if is_leaf else None,
+                payload_processor=payload_processor if is_leaf else None,
                 log_error_handling_policy=log_error_handling_policy if is_leaf else None,
             )
 
@@ -411,7 +416,7 @@ def _bootstrap() -> tuple[_LogSinkRegistry, _LogContextRegistry]:
         root_ctx = LogContext(
             namespace=ROOT_LOG_CONTEXT_NAMESPACE,
             log_sink=log_sink,
-            verbosity_level=LogVerbosityLevel.NORMAL,
+            payload_processor=LogPayloadProcessor(),
         )
 
         log_context_registry = _LogContextRegistry(root_ctx)
@@ -498,10 +503,8 @@ def configure_log_context(
     namespace: str,
     *,
     log_sink: LogSinkProto | None = None,
-    event_policy: LogEventPolicy | None = None,
-    verbosity_level: LogVerbosityLevel | None = None,
-    max_str_len: int | None = None,
-    max_items: int | None = None,
+    event_policy: LogEventPolicyProto | None = None,
+    payload_processor: LogPayloadProcessorProto | None = None,
     log_error_handling_policy: LogErrorHandlingPolicy | None = None,
 ) -> LogContext:
 
@@ -515,12 +518,8 @@ def configure_log_context(
                 existing.set_log_sink(log_sink)
             if event_policy is not None:
                 existing.set_event_policy(event_policy)
-            if verbosity_level is not None:
-                existing.set_verbosity_level(verbosity_level)
-            if max_str_len is not None:
-                existing.set_max_str_len(max_str_len)
-            if max_items is not None:
-                existing.set_max_items(max_items)
+            if payload_processor is not None:
+                existing.set_payload_processor(payload_processor)
             if log_error_handling_policy is not None:
                 existing.set_log_error_handling_policy(log_error_handling_policy)
 
@@ -530,9 +529,7 @@ def configure_log_context(
             namespace,
             log_sink=log_sink,
             event_policy=event_policy,
-            verbosity_level=verbosity_level,
-            max_str_len=max_str_len,
-            max_items=max_items,
+            payload_processor=payload_processor,
             log_error_handling_policy=log_error_handling_policy,
         )
 

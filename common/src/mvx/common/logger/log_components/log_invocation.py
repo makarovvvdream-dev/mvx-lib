@@ -73,7 +73,10 @@ PayloadFormatter: TypeAlias = Callable[
 ]
 
 
-def _apply_verbosity_filter(raw_spec: str, verbosity_level: str) -> str | None:
+def _apply_verbosity_filter(
+    raw_spec: str,
+    verbosity_level: str | None,
+) -> str | None:
     raw_spec_stripped = raw_spec.strip()
     if not raw_spec_stripped:
         return None
@@ -83,16 +86,20 @@ def _apply_verbosity_filter(raw_spec: str, verbosity_level: str) -> str | None:
 
     left, right = raw_spec_stripped.split(":", 1)
 
-    # Right part must be non-empty
     spec = right.strip()
     if not spec:
         return None
 
-    # Build set of supported verbosity level names.
+    if verbosity_level is None:
+        return None
+
     supported_verb_levels = {p.strip() for p in left.split(",")}
     supported_verb_levels.discard("")
 
-    if not supported_verb_levels or verbosity_level in supported_verb_levels:
+    if not supported_verb_levels:
+        return spec
+
+    if verbosity_level in supported_verb_levels:
         return spec
 
     return None
@@ -101,7 +108,7 @@ def _apply_verbosity_filter(raw_spec: str, verbosity_level: str) -> str | None:
 def _resolve_fields(
     field_specs: tuple[str, ...],
     source_kwargs: dict[str, Any],
-    verbosity_level: str,
+    verbosity_level: str | None,
 ) -> list[_ResolvedField]:
 
     resolved: list[_ResolvedField] = []
@@ -235,7 +242,9 @@ def _inject_context_payload(
     # Resolve raw fields from context_fields
     resolved: list[_ResolvedField] = []
     if field_specs:
-        resolved = _resolve_fields(field_specs, source_kwargs, verbosity_level=ctx.verbosity_level)
+        resolved = _resolve_fields(
+            field_specs, source_kwargs, verbosity_level=ctx.get_plain_verbosity_level()
+        )
 
     raw_fields: dict[str, Any] = {item.alias: item.value for item in resolved}
 
@@ -288,7 +297,9 @@ def _build_logged_kwargs(
     """
     logged: dict[str, Any] = {}
 
-    for item in _resolve_fields(field_specs, source_kwargs, verbosity_level=ctx.verbosity_level):
+    for item in _resolve_fields(
+        field_specs, source_kwargs, verbosity_level=ctx.get_plain_verbosity_level()
+    ):
         logged[item.alias] = ctx.normalize_value_for_log(
             item.value,
             unbounded=item.unbounded_items,

@@ -10,31 +10,18 @@ import threading
 
 from ..models import (
     LogLevel,
-    LogAdapterResolver,
     LogSinkProto,
-    LogEventPolicy,
+    LogEventPolicyProto,
     LogEventMeta,
     LogEvent,
+    LogPayloadProcessorProto,
 )
+
 from ..helpers import log_internal_error as _log_internal_error
 
 from ..errors import LogContextResetError, LogContextUnableToLog
 
-
-from .log_payload_helpers import (
-    normalize_value_for_log,
-    normalize_primitive,
-    normalize_list_for_log,
-    normalize_dict_for_log,
-)
-
-__all__ = ("LogVerbosityLevel", "LogErrorHandlingPolicy", "LogContext")
-
-
-class LogVerbosityLevel(StrEnum):
-    MINIMAL = "MINIMAL"
-    NORMAL = "NORMAL"
-    MAXIMUM = "MAXIMUM"
+__all__ = ("LogContext", "LogErrorHandlingPolicy")
 
 
 class LogErrorHandlingPolicy(StrEnum):
@@ -45,13 +32,8 @@ class LogErrorHandlingPolicy(StrEnum):
 
 ERR_LOGGED_FLAG = "_mvx_error_logged"
 
-DEFAULT_MAX_STR_LEN = 200
-DEFAULT_MAX_ITEMS = 10
-
 
 class LogContext:
-
-    _log_adapter_resolver: LogAdapterResolver | None
 
     @overload
     def __init__(
@@ -60,10 +42,8 @@ class LogContext:
         namespace: str | None = None,
         parent: None = None,
         log_sink: LogSinkProto,
-        event_policy: LogEventPolicy | None = None,
-        verbosity_level: LogVerbosityLevel,
-        max_str_len: int | None = None,
-        max_items: int | None = None,
+        event_policy: LogEventPolicyProto | None = None,
+        payload_processor: LogPayloadProcessorProto,
         log_error_handling_policy: LogErrorHandlingPolicy | None = None,
     ): ...
     @overload
@@ -73,10 +53,8 @@ class LogContext:
         namespace: str | None = None,
         parent: LogContext,
         log_sink: LogSinkProto | None = None,
-        event_policy: LogEventPolicy | None = None,
-        verbosity_level: LogVerbosityLevel | None = None,
-        max_str_len: int | None = None,
-        max_items: int | None = None,
+        event_policy: LogEventPolicyProto | None = None,
+        payload_processor: LogPayloadProcessorProto | None = None,
         log_error_handling_policy: LogErrorHandlingPolicy | None = None,
     ): ...
 
@@ -86,10 +64,8 @@ class LogContext:
         namespace: str | None = None,
         parent: LogContext | None = None,
         log_sink: LogSinkProto | None = None,
-        event_policy: LogEventPolicy | None = None,
-        verbosity_level: LogVerbosityLevel | None = None,
-        max_str_len: int | None = None,
-        max_items: int | None = None,
+        event_policy: LogEventPolicyProto | None = None,
+        payload_processor: LogPayloadProcessorProto | None = None,
         log_error_handling_policy: LogErrorHandlingPolicy | None = None,
     ):
 
@@ -105,9 +81,9 @@ class LogContext:
                     "argument 'log_sink' is mandatory for the root log context, must not be None"
                 )
 
-            if verbosity_level is None:
+            if payload_processor is None:
                 raise ValueError(
-                    "argument 'verbosity_level' is mandatory for the root log context, must not be None"
+                    "argument 'payload_processor' is mandatory for the root log context, must not be None"
                 )
 
         else:
@@ -119,28 +95,14 @@ class LogContext:
                 raise TypeError("argument 'log_sink' must be an instance of 'LogSinkProto'")
 
         if event_policy is not None:
-            if not isinstance(event_policy, LogEventPolicy):
+            if not isinstance(event_policy, LogEventPolicyProto):
                 raise TypeError("argument 'event_policy' must be an instance of 'LogEventPolicy'")
 
-        if verbosity_level is not None:
-            if not isinstance(verbosity_level, LogVerbosityLevel):
+        if payload_processor is not None:
+            if not isinstance(payload_processor, LogPayloadProcessorProto):
                 raise TypeError(
-                    "argument 'verbosity_level' must be an instance of 'LogVerbosityLevel'"
+                    "argument 'payload_processor' must be an instance of 'LogPayloadProcessorProto'"
                 )
-
-        if max_str_len is not None:
-            if not isinstance(max_str_len, int):
-                raise TypeError("argument 'max_str_len' must be integer when provided")
-
-            if max_str_len < 1:
-                raise ValueError("argument 'max_str_len' must be greater than 0")
-
-        if max_items is not None:
-            if not isinstance(max_items, int):
-                raise TypeError("argument 'max_items' must be integer when provided")
-
-            if max_items < 1:
-                raise ValueError("argument 'max_items' must be greater than 0")
 
         if log_error_handling_policy is not None:
             if not isinstance(log_error_handling_policy, LogErrorHandlingPolicy):
@@ -153,22 +115,17 @@ class LogContext:
         self._parent = parent
         self._log_sink = log_sink
         self._event_policy = event_policy
-        self._verbosity_level = verbosity_level
+
+        self._payload_processor = payload_processor
 
         if parent is None:
-            max_str_len = max_str_len if max_str_len is not None else DEFAULT_MAX_STR_LEN
-            max_items = max_items if max_items is not None else DEFAULT_MAX_ITEMS
             log_error_handling_policy = (
                 log_error_handling_policy
                 if log_error_handling_policy is not None
                 else LogErrorHandlingPolicy.RAISE
             )
 
-        self._max_str_len = max_str_len
-        self._max_items = max_items
         self._log_error_handling_policy = log_error_handling_policy
-        self._log_adapter_resolver = None
-
         self._log_error_printed = False
 
     # ---- Properties ----------------------------------------------------------------------
@@ -214,15 +171,15 @@ class LogContext:
             self._log_sink = None
 
     @property
-    def event_policy(self) -> LogEventPolicy | None:
+    def event_policy(self) -> LogEventPolicyProto | None:
         with self._config_lock:
             return self._event_policy
 
-    def set_event_policy(self, event_policy: LogEventPolicy) -> None:
+    def set_event_policy(self, event_policy: LogEventPolicyProto) -> None:
         if event_policy is None:
             raise ValueError("argument 'event_policy' must not be None")
 
-        if not isinstance(event_policy, LogEventPolicy):
+        if not isinstance(event_policy, LogEventPolicyProto):
             raise TypeError("argument 'event_policy' must be an instance of 'LogEventPolicy'")
 
         with self._config_lock:
@@ -233,112 +190,35 @@ class LogContext:
             self._event_policy = None
 
     @property
-    def verbosity_level(self) -> str:
+    def payload_processor(self) -> LogPayloadProcessorProto:
         with self._config_lock:
-            if self._verbosity_level is not None:
-                return self._verbosity_level.value
+            processor = self._payload_processor
+            if processor is not None:
+                return processor
 
             assert self._parent is not None, "invariant: controlled by constructor"
-            return self._parent.verbosity_level
+            return self._parent.payload_processor
 
-    def set_verbosity_level(self, verbosity_level: LogVerbosityLevel) -> None:
-        if verbosity_level is None:
-            raise ValueError("argument 'verbosity_level' must not be None")
+    def set_payload_processor(self, payload_processor: LogPayloadProcessorProto) -> None:
+        if payload_processor is None:
+            raise ValueError("argument 'payload_processor' must not be None")
 
-        if not isinstance(verbosity_level, LogVerbosityLevel):
-            raise TypeError("argument 'verbosity_level' must be an instance of 'LogVerbosityLevel'")
+        if not isinstance(payload_processor, LogPayloadProcessorProto):
+            raise TypeError(
+                "argument 'payload_processor' must be an instance of 'LogPayloadProcessorProto'"
+            )
 
         with self._config_lock:
-            self._verbosity_level = verbosity_level
+            self._payload_processor = payload_processor
 
-    def reset_verbosity_level(self) -> None:
+    def reset_payload_processor(self) -> None:
         if self.is_root:
             raise LogContextResetError(
-                target="verbosity_level",
+                target="payload_processor",
             )
-        with self._config_lock:
-            self._verbosity_level = None
-
-    @property
-    def max_str_len(self) -> int:
-        with self._config_lock:
-            if self._max_str_len is not None:
-                return self._max_str_len
-
-            assert self._parent is not None, "invariant: controlled by constructor"
-            return self._parent.max_str_len
-
-    def set_max_str_len(self, max_str_len: int) -> None:
-        if max_str_len is None:
-            raise ValueError("argument 'max_str_len' must not be None")
-
-        if not isinstance(max_str_len, int):
-            raise TypeError("argument 'max_str_len' must be integer")
-
-        if max_str_len < 1:
-            raise ValueError("argument 'max_str_len' must be greater than 0")
 
         with self._config_lock:
-            self._max_str_len = max_str_len
-
-    def reset_max_str_len(self) -> None:
-        max_str_len = DEFAULT_MAX_STR_LEN if self.is_root else None
-
-        with self._config_lock:
-            self._max_str_len = max_str_len
-
-    @property
-    def max_items(self) -> int:
-        with self._config_lock:
-            if self._max_items is not None:
-                return self._max_items
-
-            assert self._parent is not None, "invariant: controlled by constructor"
-            return self._parent.max_items
-
-    def set_max_items(self, max_items: int) -> None:
-        if max_items is None:
-            raise ValueError("argument 'max_items' must not be None")
-
-        if not isinstance(max_items, int):
-            raise TypeError("argument 'max_items' must be integer")
-
-        if max_items < 1:
-            raise ValueError("argument 'max_items' must be greater than 0")
-
-        with self._config_lock:
-            self._max_items = max_items
-
-    def reset_max_items(self) -> None:
-        max_items = DEFAULT_MAX_ITEMS if self.is_root else None
-
-        with self._config_lock:
-            self._max_items = max_items
-
-    @property
-    def log_adapter_resolver(self) -> LogAdapterResolver | None:
-        with self._config_lock:
-            if self._log_adapter_resolver is not None:
-                return self._log_adapter_resolver
-
-            if self._parent is None:
-                return None
-
-            return self._parent.log_adapter_resolver
-
-    def set_log_adapter_resolver(self, log_adapter_resolver: LogAdapterResolver) -> None:
-        if log_adapter_resolver is None:
-            raise ValueError("argument 'log_adapter_resolver' must not be None")
-
-        if not callable(log_adapter_resolver):
-            raise TypeError("argument 'log_adapter_resolver' must be a callable")
-
-        with self._config_lock:
-            self._log_adapter_resolver = log_adapter_resolver
-
-    def reset_log_adapter_resolver(self) -> None:
-        with self._config_lock:
-            self._log_adapter_resolver = None
+            self._payload_processor = None
 
     @property
     def log_error_handling_policy(self) -> LogErrorHandlingPolicy:
@@ -438,7 +318,9 @@ class LogContext:
             return
 
         payload_for_log = (
-            self.normalize_dict_for_log(payload) if not skip_payload_normalization else payload
+            self.payload_processor.normalize_payload(payload)
+            if not skip_payload_normalization
+            else payload
         )
 
         log_event = LogEvent(
@@ -644,7 +526,15 @@ class LogContext:
             # Best effort: ignore if we cannot set the flag
             pass
 
-    # ---- Values normalization ------------------------------------------------------------
+    # ---- Processing payload --------------------------------------------------------------
+
+    def normalize_payload(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        unbounded: bool = False,
+    ) -> dict[str, Any]:
+        return self.payload_processor.normalize_payload(payload, unbounded=unbounded)
 
     def normalize_value_for_log(
         self,
@@ -652,91 +542,7 @@ class LogContext:
         *,
         unbounded: bool = False,
     ) -> str | int | float | bool | bytes | dict[str, Any] | list[Any] | None:
+        return self.payload_processor.normalize_value_for_log(value, unbounded=unbounded)
 
-        return normalize_value_for_log(
-            value,
-            log_adapter_resolver=self.log_adapter_resolver,
-            verbosity_level=self.verbosity_level,
-            max_items=self.max_items if not unbounded else None,
-            max_str_len=self.max_str_len,
-        )
-
-    def normalize_primitive_for_log(self, value: Any) -> str | int | float | bytes | bool | None:
-        """
-        Normalize primitive values for logging.
-
-        This is a thin wrapper around payload_helpers.normalize_primitive.
-        """
-        return normalize_primitive(
-            value,
-            max_str_len=self.max_str_len,
-        )
-
-    @overload
-    def normalize_list_for_log(
-        self,
-        value: list[Any],
-        *,
-        unbounded: bool = False,
-    ) -> list[Any]: ...
-
-    @overload
-    def normalize_list_for_log(
-        self,
-        value: object,
-        *,
-        unbounded: bool = False,
-    ) -> str | list[Any]: ...
-
-    def normalize_list_for_log(
-        self,
-        value: object,
-        *,
-        unbounded: bool = False,
-    ) -> str | list[Any]:
-        """
-        Normalize a list/tuple for logging, one level deep.
-
-        This is a thin wrapper around payload_helpers.normalize_list_for_log.
-        """
-        return normalize_list_for_log(
-            value,
-            log_adapter_resolver=self.log_adapter_resolver,
-            verbosity_level=self.verbosity_level,
-            max_items=self.max_items if not unbounded else None,
-            max_str_len=self.max_str_len,
-        )
-
-    @overload
-    def normalize_dict_for_log(
-        self,
-        value: Mapping[str, Any],
-        *,
-        unbounded: bool = False,
-    ) -> dict[str, Any]: ...
-
-    @overload
-    def normalize_dict_for_log(
-        self,
-        value: object,
-        *,
-        unbounded: bool = False,
-    ) -> str | dict[str, Any]: ...
-    def normalize_dict_for_log(
-        self,
-        value: object,
-        *,
-        unbounded: bool = False,
-    ) -> str | dict[str, Any]:
-        """
-        Normalize a dict for logging, one level deep.
-
-        This is a thin wrapper around payload_helpers.normalize_dict_for_log.
-        """
-        return normalize_dict_for_log(
-            value,
-            log_adapter_resolver=self.log_adapter_resolver,
-            verbosity_level=self.verbosity_level,
-            max_items=self.max_items if not unbounded else None,
-            max_str_len=self.max_str_len,
-        )
+    def get_plain_verbosity_level(self) -> str | None:
+        return self.payload_processor.get_plain_verbosity_level()

@@ -57,7 +57,7 @@ This makes it possible to control which parts of a library are verbose, which pa
 
 For operation-style logging, the policy controls whether the ordinary invocation event is enabled. Failure and cancellation are treated as error-path outcomes by `log_invocation`.
 
-For example, a policy may log only errors, enable the full lifecycle of operations, or keep `failed` and `cancelled` events while suppressing noisy `invoke` and `success` events.
+For example, a policy may enable only selected namespaces, suppress noisy event names, or enable diagnostics for a particular entity or source location.
 
 ### Depth
 

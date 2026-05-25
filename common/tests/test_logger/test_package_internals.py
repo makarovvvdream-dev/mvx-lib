@@ -16,11 +16,8 @@ from mvx.common.logger import (
     LogSinkCreateError,
     LogSinkCloseError,
     LogSinkIsInUseError,
-    LogVerbosityLevel,
+    LogPayloadProcessor,
 )
-
-# noinspection PyProtectedMember
-from mvx.common.logger.log_context.log_context import DEFAULT_MAX_ITEMS, DEFAULT_MAX_STR_LEN
 
 
 class RecordingSink:
@@ -381,7 +378,7 @@ def test_c01_log_context_registry_initially_contains_root_context() -> None:
     root = logger_pack.LogContext(
         namespace=logger_pack.ROOT_LOG_CONTEXT_NAMESPACE,
         log_sink=sink,
-        verbosity_level=LogVerbosityLevel.NORMAL,
+        payload_processor=LogPayloadProcessor(),
     )
 
     registry = logger_pack._LogContextRegistry(root)
@@ -397,7 +394,7 @@ def test_c02_log_context_registry_put_returns_existing_context_for_same_namespac
     root = logger_pack.LogContext(
         namespace=logger_pack.ROOT_LOG_CONTEXT_NAMESPACE,
         log_sink=sink,
-        verbosity_level=LogVerbosityLevel.NORMAL,
+        payload_processor=LogPayloadProcessor(),
     )
     registry = logger_pack._LogContextRegistry(root)
 
@@ -420,7 +417,7 @@ def test_c03_log_context_registry_create_chain_creates_intermediate_contexts() -
     root = logger_pack.LogContext(
         namespace=logger_pack.ROOT_LOG_CONTEXT_NAMESPACE,
         log_sink=sink,
-        verbosity_level=LogVerbosityLevel.NORMAL,
+        payload_processor=LogPayloadProcessor(),
     )
     registry = logger_pack._LogContextRegistry(root)
 
@@ -436,19 +433,20 @@ def test_c04_log_context_registry_create_chain_applies_settings_only_to_leaf() -
     root_sink = RecordingSink(marker="root")
     leaf_sink = RecordingSink(marker="leaf")
 
+    root_processor = LogPayloadProcessor()
+    leaf_processor = LogPayloadProcessor(max_str_len=10, max_items=2)
+
     root = logger_pack.LogContext(
         namespace=logger_pack.ROOT_LOG_CONTEXT_NAMESPACE,
         log_sink=root_sink,
-        verbosity_level=LogVerbosityLevel.NORMAL,
+        payload_processor=root_processor,
     )
     registry = logger_pack._LogContextRegistry(root)
 
     leaf = registry.create_log_context_chain(
         "mvx.ldap.schema",
         log_sink=leaf_sink,
-        verbosity_level=LogVerbosityLevel.MAXIMUM,
-        max_str_len=10,
-        max_items=2,
+        payload_processor=leaf_processor,
     )
 
     mvx = registry.get("mvx")
@@ -465,17 +463,13 @@ def test_c04_log_context_registry_create_chain_applies_settings_only_to_leaf() -
     assert ldap.log_sink is root_sink
     assert leaf.log_sink is leaf_sink
 
-    assert mvx.verbosity_level == LogVerbosityLevel.NORMAL.value
-    assert ldap.verbosity_level == LogVerbosityLevel.NORMAL.value
-    assert leaf.verbosity_level == LogVerbosityLevel.MAXIMUM.value
+    assert mvx.payload_processor is root_processor
+    assert ldap.payload_processor is root_processor
+    assert leaf.payload_processor is leaf_processor
 
-    assert mvx.max_str_len == DEFAULT_MAX_STR_LEN
-    assert ldap.max_str_len == DEFAULT_MAX_STR_LEN
-    assert leaf.max_str_len == 10
-
-    assert mvx.max_items == DEFAULT_MAX_ITEMS
-    assert ldap.max_items == DEFAULT_MAX_ITEMS
-    assert leaf.max_items == 2
+    assert mvx.normalize_value_for_log(["a", "b", "c"]) == ["a", "b", "c"]
+    assert ldap.normalize_value_for_log(["a", "b", "c"]) == ["a", "b", "c"]
+    assert leaf.normalize_value_for_log(["a", "b", "c"]) == ["a", "b", "... (1 more)"]
 
 
 def test_c05_log_context_registry_clear_removes_non_root_contexts_and_keeps_root() -> None:
@@ -483,7 +477,7 @@ def test_c05_log_context_registry_clear_removes_non_root_contexts_and_keeps_root
     root = logger_pack.LogContext(
         namespace=logger_pack.ROOT_LOG_CONTEXT_NAMESPACE,
         log_sink=sink,
-        verbosity_level=LogVerbosityLevel.NORMAL,
+        payload_processor=LogPayloadProcessor(),
     )
     registry = logger_pack._LogContextRegistry(root)
 
@@ -504,7 +498,7 @@ def test_c06_log_context_registry_get_contexts_by_log_sink_returns_only_local_us
     root = logger_pack.LogContext(
         namespace=logger_pack.ROOT_LOG_CONTEXT_NAMESPACE,
         log_sink=root_sink,
-        verbosity_level=LogVerbosityLevel.NORMAL,
+        payload_processor=LogPayloadProcessor(),
     )
     registry = logger_pack._LogContextRegistry(root)
 
@@ -613,7 +607,6 @@ def test_e03_bootstrap_creates_root_context_bound_to_default_sink() -> None:
     assert root.namespace == logger_pack.ROOT_LOG_CONTEXT_NAMESPACE
     assert root.get_local_log_sink() is sink
     assert root.log_sink is sink
-    assert root.verbosity_level == LogVerbosityLevel.NORMAL.value
 
 
 def test_e04_bootstrap_logs_and_reraises_registry_failure(
