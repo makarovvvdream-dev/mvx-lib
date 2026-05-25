@@ -162,7 +162,7 @@ class LogPayloadProcessor:
     ) -> dict[str, Any]:
 
         effective_max_items = self.max_items if not unbounded else None
-        effective_max_str_len = self.max_str_len if not unbounded else None
+        effective_max_str_len = self.max_str_len
 
         return self._normalize_dict_for_log(
             payload, max_items=effective_max_items, max_str_len=effective_max_str_len
@@ -176,7 +176,7 @@ class LogPayloadProcessor:
     ) -> str | int | float | bool | bytes | dict[str, Any] | list[Any] | None:
 
         effective_max_items = self.max_items if not unbounded else None
-        effective_max_str_len = self.max_str_len if not unbounded else None
+        effective_max_str_len = self.max_str_len
 
         return self._normalize_value_for_log_core(
             value, max_items=effective_max_items, max_str_len=effective_max_str_len

@@ -343,12 +343,12 @@ def test_c08_normalize_payload_with_unbounded_true_does_not_limit_key_count() ->
     assert result == {"a": 1, "b": 2}
 
 
-def test_c09_normalize_payload_with_unbounded_true_does_not_truncate_keys() -> None:
+def test_c09_normalize_payload_with_unbounded_true_still_truncates_keys() -> None:
     processor = LogPayloadProcessor(max_str_len=3)
 
     result = processor.normalize_payload({"abcdef": 1}, unbounded=True)
 
-    assert result == {"abcdef": 1}
+    assert result == {"abc...": 1}
 
 
 # ---- D. Primitive normalization ----------------------------------------------------------
@@ -366,10 +366,10 @@ def test_d02_long_str_is_truncated_with_ellipsis() -> None:
     assert processor.normalize_value_for_log("abcdef") == "abc..."
 
 
-def test_d03_long_str_is_not_truncated_when_unbounded_true() -> None:
+def test_d03_long_str_is_still_truncated_when_unbounded_true() -> None:
     processor = LogPayloadProcessor(max_str_len=3)
 
-    assert processor.normalize_value_for_log("abcdef", unbounded=True) == "abcdef"
+    assert processor.normalize_value_for_log("abcdef", unbounded=True) == "abc..."
 
 
 def test_d04_bytes_are_preserved_as_bytes() -> None:
@@ -671,12 +671,14 @@ def test_f06_mapping_normalization_respects_max_str_len_for_keys() -> None:
     assert result == {"abc...": 1}
 
 
-def test_f07_mapping_normalization_with_unbounded_true_disables_key_and_item_limits() -> None:
+def test_f07_mapping_normalization_with_unbounded_true_disables_item_limit_but_not_key_truncation() -> (
+    None
+):
     processor = LogPayloadProcessor(max_items=1, max_str_len=3)
 
     result = processor.normalize_value_for_log({"abcdef": 1, "ghijkl": 2}, unbounded=True)
 
-    assert result == {"abcdef": 1, "ghijkl": 2}
+    assert result == {"abc...": 1, "ghi...": 2}
 
 
 def test_f08_mapping_with_short_primitive_values_is_preserved() -> None:
@@ -1457,12 +1459,12 @@ def test_j01_unbounded_true_disables_max_items_for_payload_mapping() -> None:
     assert result == {"a": 1, "b": 2}
 
 
-def test_j02_unbounded_true_disables_max_str_len_for_payload_keys() -> None:
+def test_j02_unbounded_true_does_not_disable_max_str_len_for_payload_keys() -> None:
     processor = LogPayloadProcessor(max_str_len=1)
 
     result = processor.normalize_payload({"abcdef": 1}, unbounded=True)
 
-    assert result == {"abcdef": 1}
+    assert result == {"a...": 1}
 
 
 def test_j03_unbounded_true_disables_max_items_for_value_list() -> None:
@@ -1473,12 +1475,12 @@ def test_j03_unbounded_true_disables_max_items_for_value_list() -> None:
     assert result == [1, 2, 3]
 
 
-def test_j04_unbounded_true_disables_max_str_len_for_value_strings() -> None:
+def test_j04_unbounded_true_does_not_disable_max_str_len_for_value_strings() -> None:
     processor = LogPayloadProcessor(max_str_len=1)
 
     result = processor.normalize_value_for_log("abcdef", unbounded=True)
 
-    assert result == "abcdef"
+    assert result == "a..."
 
 
 def test_j05_unbounded_true_does_not_post_process_provider_payload() -> None:
@@ -1510,20 +1512,20 @@ def test_j06_unbounded_true_does_not_post_process_adapter_payload() -> None:
     assert result == {"abcdef": "ghijkl", "extra": [1, 2, 3]}
 
 
-def test_j07_unbounded_true_disables_string_truncation_for_list_leaf_items() -> None:
+def test_j07_unbounded_true_does_not_disable_string_truncation_for_list_leaf_items() -> None:
     processor = LogPayloadProcessor(max_str_len=1)
 
     result = processor.normalize_value_for_log(["abcdef"], unbounded=True)
 
-    assert result == ["abcdef"]
+    assert result == ["a..."]
 
 
-def test_j08_unbounded_true_disables_string_truncation_for_mapping_leaf_values() -> None:
+def test_j08_unbounded_true_does_not_disable_string_truncation_for_mapping_leaf_values() -> None:
     processor = LogPayloadProcessor(max_str_len=1)
 
     result = processor.normalize_value_for_log({"value": "abcdef"}, unbounded=True)
 
-    assert result == {"value": "abcdef"}
+    assert result == {"v...": "a..."}
 
 
 def test_j09_unbounded_true_disables_mapping_more_marker_for_value_mapping() -> None:
@@ -1566,9 +1568,9 @@ def test_j11_unbounded_true_preserves_shallow_policy_for_payload_nested_containe
     )
 
     assert result == {
-        "list_value": "<list>",
-        "dict_value": "<dict>",
-        "tuple_value": "<tuple>",
+        "l...": "<list>",
+        "d...": "<dict>",
+        "t...": "<tuple>",
     }
 
 
