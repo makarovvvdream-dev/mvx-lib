@@ -6,5 +6,8 @@
 
 starting_to_use
 log_context/overview
+logging_pipeline
+log_event
+event_policy/overview
 sinks/overview
 ```

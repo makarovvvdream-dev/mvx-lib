@@ -5,7 +5,7 @@
 :local:
 ```
 
-`LogContext` is the main entry point into `MVX Logger` ecosystem.
+`LogContext` is the main entry point into the `MVX Logger` ecosystem.
 
 By analogy with the standard `logging` package, `LogContext` plays a role similar to `Logger`: it is obtained by name and primarily used to emit events.
 
@@ -24,7 +24,7 @@ ctx.log_info_event(
 
 However, `LogContext` is not just a thin wrapper around `logging.Logger`.
 
-Its role is broader: it connects the logging name, event filtering rules, payload preparation rules, and the sink to which the event will be passed.
+Its role is broader: it connects the logging name, event filtering rules, the payload processor, and the sink to which the event will be passed.
 
 That is why the rest of the code usually works with logging contexts rather than directly with sinks, although direct sink usage is also possible.
 
@@ -36,7 +36,7 @@ First, it defines the default namespace of an event. If the context is named `my
 
 Second, it determines whether a particular event should be logged at all. For this purpose, an event policy can be passed to the context. If no policy is set, every event is considered allowed.
 
-Third, the context stores settings that affect payload preparation: verbosity level, string length limits, collection item limits, and an adapter resolver for custom object serialization. Moreover, it provides access to payload normalization functions.
+Third, the context provides access to payload preparation through the configured payload processor. The context itself does not decide how deeply payload data should be normalized. It delegates this work to the payload processor assigned to it or inherited from its parent.
 
 Fourth, the context knows which sink should receive the event.
 
@@ -95,15 +95,15 @@ If a context does not have its own setting, it takes that setting from its paren
 
 For example, if a sink is configured at the `my_app` level, then `my_app.worker` and `my_app.worker.tasks` will use the same sink until another one is explicitly assigned to them.
 
-The same applies to verbosity level, payload limits, the adapter resolver, and the logging error handling policy.
+The same applies to the payload processor and the logging error handling policy. A child context may inherit the parent's payload processor or use its own a local one.
 
 ## Root context
 
 Inside `MVX Logger`, the root context always exists.
 
-It is created during package initialization and is the top point of the entire hierarchy.
+It is created during package initialization and is the topmost point of the entire hierarchy.
 
-The root context receives the default sink, default verbosity level, and base settings from which other contexts can inherit.
+The root context receives the default sink, the default payload processor, and base settings from which other contexts can inherit.
 
 Usually, user code does not need to start from the root context. A named context is used much more often:
 

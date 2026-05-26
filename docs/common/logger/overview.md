@@ -65,19 +65,15 @@ Logging depth answers a different question:
 
 > How much data should be placed into the event payload?
 
-This should not be decided somewhere deep inside the logger. Objects themselves usually know best how to represent their state safely and usefully in logs.
+Depth is controlled by a separate component called a payload processor. This approach keeps log payload normalization encapsulated in a centrally controlled component, independent from event filtering mechanics and delivery. Thus, the `event policy` controls which events are allowed to be logged, while the payload processor controls how much data is placed into the event payload and how this data should be normalized.
 
-For this reason, `MVX Logger` provides several layers of depth control:
+The package includes a default implementation of the payload processor, `LogPayloadProcessor`. It is intended to cover the usual logging-depth requirements out of the box. It can produce more compact or more detailed payloads depending on the selected verbosity level, keep very long strings and large collections under control, and ask domain objects for their own log representation when they provide one.
 
-* `verbosity_level`;
-* string length limits;
-* collection item limits;
-* object serialization through `to_log_payload()`;
-* serialization adapters;
-* dedicated error serialization;
-* masking or shortening of sensitive and large values.
+The default processor also supports external adapters for objects that cannot or should not implement logging methods themselves. Errors are handled separately, so structured exceptions can expose useful diagnostic details without turning every exception into an opaque string. Large or sensitive values can be shortened or masked before they reach the final `LogEvent`.
 
-The idea is that the logger should not know the internal structure of an LDAP response, a network transport outcome, a schema descriptor, or a domain error. An object may provide a compact or detailed representation of itself. After the metadata policy accepts an event, `LogContext` applies the common payload normalization rules before delivering the final `LogEvent` to a sink.
+For cases where the default behavior is not enough, a custom payload processor can be implemented and used inside the logger infrastructure.
+
+After the event policy accepts an event, `LogContext` delegates payload normalization to the configured payload processor. The normalized payload is then placed into the final `LogEvent` and delivered to a sink.
 
 ## LogContext as the entry point
 
@@ -90,7 +86,7 @@ If the standard `logging.Logger` is the usual entry point for message-based logs
 - accepting an event;
 - building event metadata;
 - applying the event selection policy to that metadata;
-- normalizing the payload for accepted events;
+- normalizing the payload for accepted events via the payload processor;
 - building the final `LogEvent`;
 - handling logging errors according to policy;
 - passing the event to a sink.
@@ -155,7 +151,7 @@ A typical operation has a lifecycle:
 * it fails with an error;
 * it is cancelled.
 
-`log_invocation` turns this lifecycle into standardized events:
+`log_invocation` turns this lifecycle into standardized events types:
 
 * `invoke`;
 * `success`;

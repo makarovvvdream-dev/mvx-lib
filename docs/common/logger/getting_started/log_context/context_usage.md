@@ -14,7 +14,7 @@ This page does not describe all internal details of `LogContext`. It shows the m
 The main way to emit an event is to call one of the context methods for a specific logging level.
 
 ```python
-from mvx.common.logger import LogVerbosityLevel, configure_log_context
+from mvx.common.logger import configure_log_context
 
 ctx = configure_log_context("my_app.worker")
 
@@ -70,7 +70,7 @@ ctx.log_event(
 In the simple case, it is enough to pass an event name and a payload.
 
 ```python
-from mvx.common.logger import LogLevel, configure_log_context
+from mvx.common.logger import configure_log_context
 
 ctx = configure_log_context("my_app")
 
@@ -88,7 +88,7 @@ The context adds the event namespace itself. If the context is named `my_app.api
 If needed, the namespace can be overridden explicitly with `event_namespace`.
 
 ```python
-from mvx.common.logger import LogLevel, configure_log_context
+from mvx.common.logger import configure_log_context
 
 ctx = configure_log_context("my_app")
 
@@ -104,7 +104,7 @@ ctx.log_info_event(
 Additional event fields can also be passed:
 
 ```python
-from mvx.common.logger import LogLevel, configure_log_context
+from mvx.common.logger import configure_log_context
 
 ctx = configure_log_context("my_app")
 
@@ -136,7 +136,7 @@ The main method is `build_error_payload()`.
 It turns an exception into a payload that can be passed to an event.
 
 ```python
-from mvx.common.logger import LogLevel, configure_log_context
+from mvx.common.logger import configure_log_context
 
 ctx = configure_log_context("my_app")
 
@@ -192,7 +192,7 @@ raise StructuredError(
 Such an error can be passed directly to `build_error_payload()`:
 
 ```python
-from mvx.common.logger import LogLevel, configure_log_context
+from mvx.common.logger import configure_log_context
 from mvx.common.errors import StructuredError
 
 ctx = configure_log_context("my_app")
@@ -234,7 +234,7 @@ All these classes are designed to work with `LogContext`: if an error provides a
 The context can also mark a specific exception object as already logged.
 
 ```python
-from mvx.common.logger import LogLevel, configure_log_context
+from mvx.common.logger import configure_log_context
 
 ctx = configure_log_context("my_app")
 
@@ -261,10 +261,10 @@ The mark is applied on a best-effort basis. If the exception object does not all
 
 Sometimes user code wants to normalize selected values explicitly before assembling a payload.
 
-In this case, the context can be used as a single normalization point for values.
+In this case, the context can still be used as an access point to the configured payload processor.
 
 ```python
-from mvx.common.logger import LogLevel, configure_log_context
+from mvx.common.logger import configure_log_context
 from dataclasses import dataclass
 
 ctx = configure_log_context("my_app")
@@ -274,7 +274,7 @@ class BindOutcome:
     result: bool
     error: Exception | None
 
-# just samples
+# Sample values
 result = BindOutcome(result=True,error=None)
 items = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]
 metadata = {
@@ -284,8 +284,8 @@ metadata = {
 
 payload = {
     "result": ctx.normalize_value_for_log(result),
-    "items": ctx.normalize_list_for_log(items),
-    "metadata": ctx.normalize_dict_for_log(metadata),
+    "items": ctx.normalize_value_for_log(items),
+    "metadata": ctx.normalize_value_for_log(metadata),
 }
 
 ctx.log_info_event(
@@ -297,35 +297,28 @@ ctx.log_info_event(
 
 Because this payload is already prepared explicitly, normalization is skipped on the logging call itself.
 
-The context provides several helper methods:
+The context provides helper methods that delegate normalization to the configured payload processor:
 
-* `normalize_value_for_log(value)` — normalizes an arbitrary value;
-* `normalize_primitive_for_log(value)` — normalizes a primitive value;
-* `normalize_list_for_log(value)` — normalizes a list or tuple;
-* `normalize_dict_for_log(value)` — normalizes a dictionary.
+* `normalize_payload(payload)` — normalizes a payload dictionary;
+* `normalize_value_for_log(value)` — normalizes an arbitrary value.
 
-These methods use the context settings:
+These methods use the payload processor configured for the context.
 
-* `verbosity_level`;
-* `max_str_len`;
-* `max_items`;
-* `log_adapter_resolver`.
+For example, if the configured payload processor has `max_str_len=100`, long strings are shortened according to this setting during payload normalization.
 
-For example, if the context has `max_str_len=100`, long strings are shortened according to this setting during payload normalization.
+If the configured payload processor has `max_items=10`, large lists and dictionaries are limited according to this setting.
 
-If `max_items=10` is set, large lists and dictionaries are limited to that number of items.
-
-For `normalize_value_for_log()`, `normalize_list_for_log()`, and `normalize_dict_for_log()`, `unbounded=True` can be passed.
+For `normalize_payload()` and `normalize_value_for_log()`, `unbounded=True` can be passed.
 
 ```python
-from mvx.common.logger import LogLevel, configure_log_context
+from mvx.common.logger import configure_log_context
 
 ctx = configure_log_context("my_app")
 
 items = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]
 
 payload = {
-    "all_items": ctx.normalize_list_for_log(items, unbounded=True),
+    "all_items": ctx.normalize_value_for_log(items, unbounded=True),
 }
 ```
 
@@ -333,12 +326,10 @@ In this case, the `max_items` limit is not applied to this specific call.
 
 These helper methods are useful when user code wants to prepare payload values before passing them to a logging method.
 
-The logging methods normalize the payload automatically by default. This means that values inside the payload are prepared according to the context settings before the final `LogEvent` is delivered.
+The logging methods normalize the payload automatically by default. This means that values inside the payload are prepared by the configured payload processor before the final `LogEvent` is delivered.
 
-The helper methods are still useful when user code wants to normalize values explicitly before assembling a payload, or when a lower-level component builds a prepared `LogEvent` and emits it directly.
+The helper methods let user code apply the configured payload processor explicitly.
 
 If the payload is already log-ready, normalization can be skipped explicitly with `skip_payload_normalization=True`.
-
-The helper methods let user code apply the context settings explicitly: `verbosity_level`, `max_str_len`, `max_items`, and `log_adapter_resolver`.
 
 This keeps manually prepared payload values consistent with the same normalization rules used elsewhere in the logger ecosystem.

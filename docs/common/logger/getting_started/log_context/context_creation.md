@@ -25,14 +25,22 @@ assert ctx1 is ctx2
 
 The word `configure` is important here. A repeated call can also update the existing context.
 
-For example, this call returns the existing `my_app` context and changes its verbosity level:
+For example, this call returns the existing `my_app` context and assigns a local payload processor to it:
 
 ```python
-from mvx.common.logger import LogVerbosityLevel, configure_log_context
+from mvx.common.logger import (
+    LogPayloadProcessor,
+    LogVerbosityLevel,
+    configure_log_context,
+)
+
+payload_processor = LogPayloadProcessor(
+    verbosity_level=LogVerbosityLevel.MAXIMUM,
+)
 
 ctx = configure_log_context(
     "my_app",
-    verbosity_level=LogVerbosityLevel.MAXIMUM,
+    payload_processor=payload_processor,
 )
 ```
 

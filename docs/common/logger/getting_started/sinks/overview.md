@@ -29,7 +29,7 @@ Separating the context from the sink keeps two different responsibilities apart.
 
 * logging namespace;
 * event selection;
-* payload settings;
+* payload processing;
 * logging error handling;
 * sink selection.
 

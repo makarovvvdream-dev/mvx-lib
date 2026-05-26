@@ -86,7 +86,7 @@ When `mvx.common.logger` is imported, the `MVX Logger` package is initialized. D
 
 2. Creates the root logging context.
 
-   The previously created sink is assigned to it. No policies that restrict event logging are applied. All logging contexts configured later inherit the root logging context settings.
+   The previously created sink and the default payload processor are assigned to it. No policies that restrict event logging are applied. All logging contexts configured later inherit the root logging context settings.
 
 Then the user code runs:
 
