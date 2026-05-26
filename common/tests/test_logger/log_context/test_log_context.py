@@ -172,7 +172,7 @@ def test_a03_root_context_uses_default_error_policy() -> None:
         log_error_handling_policy=None,
     )
 
-    assert ctx.log_error_handling_policy is LogErrorHandlingPolicy.RAISE
+    assert ctx.log_error_handling_policy is LogErrorHandlingPolicy.PRINT_STDERR
 
 
 def test_a04_root_context_accepts_custom_payload_processor_and_error_policy() -> None:
