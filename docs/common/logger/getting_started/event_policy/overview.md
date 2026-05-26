@@ -174,5 +174,5 @@ The exact implementation is up to the application or library.
 
 event_metadata
 writing_policy
-context_policy
+сonfiguring_policy
 ```

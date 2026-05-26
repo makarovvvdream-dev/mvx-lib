@@ -9,5 +9,7 @@ log_context/overview
 logging_pipeline
 log_event
 event_policy/overview
+payload_processor/overview
 sinks/overview
+logging_infrastructure_errors
 ```

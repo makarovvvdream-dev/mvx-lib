@@ -173,17 +173,12 @@ This explicitly connects the context and the sink.
 
 ## What to remember
 
-A sink is an event delivery mechanism.
-
-The context decides which events should be sent, prepares accepted event payloads, and passes completed `LogEvent` objects to the sink.
-
-The sink receives a completed event and delivers it to its destination.
-
-A synchronous sink delivers an event in the caller's thread.
-
-An asynchronous sink buffers an event and delivers it through its own runtime.
-
-The code that calls `ctx.log_info_event(...)` should not depend on which sink is used behind the context.
+* A sink is an event delivery mechanism.
+* The context decides which events should be sent, prepares accepted event payloads, and passes completed `LogEvent` objects to the sink.
+* The sink receives a completed event and delivers it to its destination.
+* A synchronous sink delivers an event in the caller's thread.
+* An asynchronous sink buffers an event and delivers it through its own runtime.
+* The code that calls `ctx.log_info_event(...)` should not depend on which sink is used behind the context.
 
 ## What to read next
 

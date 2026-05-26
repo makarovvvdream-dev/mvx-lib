@@ -122,7 +122,7 @@ class LogContext:
             log_error_handling_policy = (
                 log_error_handling_policy
                 if log_error_handling_policy is not None
-                else LogErrorHandlingPolicy.RAISE
+                else LogErrorHandlingPolicy.PRINT_STDERR
             )
 
         self._log_error_handling_policy = log_error_handling_policy
