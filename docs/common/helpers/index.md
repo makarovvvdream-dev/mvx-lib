@@ -9,7 +9,7 @@ problem and is documented on its own page.
 ```{toctree}
 :maxdepth: 1
 
-introspection
+get_func_module_and_qualname
 api_error_processor
 run_with_cancellation_policy
 ```

@@ -1,0 +1,878 @@
+# src/mvx/common/logger/log_components/log_invocation.py
+from __future__ import annotations
+
+from typing import ParamSpec, TypeVar, Callable, Awaitable, Any, cast, TypeAlias
+from dataclasses import dataclass
+from enum import StrEnum
+
+import re
+
+import asyncio
+import inspect
+from functools import wraps
+import time
+
+from ..models import LogLevel, LogEventMeta, LogEvent
+from .protocols import LogContextProto, LogContextProviderProto, LogEntityIdProviderProto
+
+__all__ = ("log_invocation",)
+
+
+class _InvocationEventType(StrEnum):
+    INVOKE = "invoke"
+    SUCCESS = "success"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+_SYSTEM_KEYS: frozenset[str] = frozenset({"error", "kwargs", "result", "cancelled", "closures"})
+
+_EVENT_RE = re.compile(r"^[A-Za-z_.]+$")
+
+
+def _resolve_context(args: tuple[Any, ...]) -> LogContextProto:
+    first_arg = args[0] if args else None
+    if isinstance(first_arg, LogContextProviderProto):
+        return first_arg.get_log_context()
+
+    raise RuntimeError("no logger context found")
+
+
+def _resolve_entity_id(args: tuple[Any, ...]) -> str | None:
+    first_arg = args[0] if args else None
+    if isinstance(first_arg, LogEntityIdProviderProto):
+        return first_arg.identity
+
+    return None
+
+
+def _extract_func_arguments(
+    func_signature: inspect.Signature,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        bound = func_signature.bind(*args, **kwargs)
+        bound.apply_defaults()
+        res = dict(bound.arguments)
+    except TypeError:
+        res = dict(kwargs)
+
+    return res
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedField:
+    alias: str
+    value: Any
+    unbounded_items: bool
+
+
+PayloadFormatter: TypeAlias = Callable[[LogContextProto, str, str, dict[str, Any]], dict[str, Any]]
+
+
+def _apply_verbosity_filter(
+    raw_spec: str,
+    verbosity_level: str | None,
+) -> str | None:
+    raw_spec_stripped = raw_spec.strip()
+    if not raw_spec_stripped:
+        return None
+
+    if ":" not in raw_spec_stripped:
+        return raw_spec_stripped
+
+    left, right = raw_spec_stripped.split(":", 1)
+
+    spec = right.strip()
+    if not spec:
+        return None
+
+    if verbosity_level is None:
+        return None
+
+    supported_verb_levels = {p.strip() for p in left.split(",")}
+    supported_verb_levels.discard("")
+
+    if not supported_verb_levels:
+        return spec
+
+    if verbosity_level in supported_verb_levels:
+        return spec
+
+    return None
+
+
+def _resolve_fields(
+    field_specs: tuple[str, ...],
+    source_kwargs: dict[str, Any],
+    verbosity_level: str | None,
+) -> list[_ResolvedField]:
+
+    resolved: list[_ResolvedField] = []
+
+    for spec in field_specs:
+        spec = spec.strip()
+        if not spec:
+            continue
+
+        effective_spec = _apply_verbosity_filter(spec, verbosity_level)
+        if effective_spec is None:
+            continue
+
+        spec = effective_spec
+
+        unbounded_items = False
+        if spec.endswith("!"):
+            unbounded_items = True
+            spec = spec[:-1].strip()
+            if not spec:
+                continue
+
+        alias: str | None = None
+        if "=" in spec:
+            alias_part, path_part = spec.split("=", 1)
+            alias_candidate = alias_part.strip()
+            path_str = path_part.strip()
+            if alias_candidate:
+                alias = alias_candidate
+        else:
+            path_str = spec
+
+        if not path_str:
+            continue
+
+        path_parts = [p for p in path_str.split(".") if p]
+        if not path_parts:
+            continue
+
+        kw_name = path_parts[0]
+        attr_chain = path_parts[1:]
+
+        if kw_name not in source_kwargs:
+            continue
+
+        value = source_kwargs[kw_name]
+
+        failed = False
+        for attr in attr_chain:
+            if attr == "len()":
+                # noinspection PyBroadException
+                try:
+                    # noinspection PyTypeChecker
+                    value = len(value)
+                except Exception:
+                    failed = True
+                    break
+                continue
+            # noinspection PyBroadException
+            try:
+                value = getattr(value, attr)
+            except Exception:
+                failed = True
+                break
+
+        if failed:
+            continue
+
+        if alias is None:
+            alias = path_parts[-1]
+
+        # noinspection PyTypeChecker
+        resolved.append(_ResolvedField(alias=alias, value=value, unbounded_items=unbounded_items))
+
+    return resolved
+
+
+def _inject_context_payload(
+    *,
+    ctx: LogContextProto,
+    event: str,
+    event_outcome: _InvocationEventType,
+    field_specs: tuple[str, ...],
+    source_kwargs: dict[str, Any],
+    payload_formatter: PayloadFormatter | None,
+    target_payload: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Resolve context fields and inject context payload into an outcome payload.
+
+    This helper is used by all `log_invocation` outcome emitters. It resolves
+    `context_fields` from the bound function arguments, optionally passes the raw
+    resolved values to `payload_formatter`, and injects the produced context
+    payload into `target_payload`.
+
+    If `payload_formatter` returns a dictionary, that dictionary is injected. If
+    it raises or returns a non-dictionary value, resolved fields are normalized one
+    by one and injected instead.
+
+    Formatter output is protected from overwriting system payload keys. If the
+    produced payload contains any system key, it is placed under the `context` key.
+
+    :param ctx: Effective logging context used for verbosity lookup and value
+        normalization.
+    :param event: Decorated event name.
+    :param event_outcome: Current invocation outcome.
+    :param field_specs: Context field specifications to resolve.
+    :param source_kwargs: Bound function arguments used as the field source.
+    :param payload_formatter: Optional formatter that can shape the resolved raw
+        context fields.
+    :param target_payload: Payload dictionary being built for the current outcome.
+    :return: The updated target payload.
+    """
+
+    def _inject_to_target(
+        _payload: dict[str, Any] | None, _target: dict[str, Any]
+    ) -> dict[str, Any]:
+        if not _payload:
+            return _target
+
+        if any(k in _SYSTEM_KEYS for k in _payload.keys()):
+            _existing = _target.get("context")
+            if isinstance(_existing, dict):
+                _existing.update(_payload)
+            else:
+                _target["context"] = _payload
+
+            return _target
+
+        _target.update(_payload)
+        return _target
+
+    # Resolve raw fields from context_fields
+    resolved: list[_ResolvedField] = []
+    if field_specs:
+        resolved = _resolve_fields(
+            field_specs, source_kwargs, verbosity_level=ctx.get_plain_verbosity_level()
+        )
+
+    raw_fields: dict[str, Any] = {item.alias: item.value for item in resolved}
+
+    # Always call formatter when provided, even if raw_fields is empty
+    if payload_formatter is not None:
+        # noinspection PyBroadException
+        try:
+            produced = payload_formatter(ctx, event_outcome.value, event, dict(raw_fields))
+        except Exception:
+            produced = None
+
+        if isinstance(produced, dict):
+            return _inject_to_target(dict(produced), target_payload)
+
+    # Fallback: normalized fields if we have any, otherwise empty dict
+    if not resolved:
+        return target_payload
+
+    normalized: dict[str, Any] = {}
+    for item in resolved:
+        normalized[item.alias] = ctx.normalize_value_for_log(
+            item.value,
+            unbounded=item.unbounded_items,
+        )
+    return _inject_to_target(normalized, target_payload)
+
+
+def _build_logged_kwargs(
+    *,
+    ctx: LogContextProto,
+    field_specs: tuple[str, ...],
+    source_kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Build the `kwargs` payload section for the `invoke` outcome.
+
+    The helper resolves `log_kwargs_on_invoke` field specifications from the bound
+    function arguments and normalizes each selected value through the effective
+    logging context.
+
+    Unresolvable field specifications are skipped.
+
+    :param ctx: Effective logging context used for verbosity lookup and value
+        normalization.
+    :param field_specs: Field specifications selected for the `invoke` payload.
+    :param source_kwargs: Bound function arguments used as the field source.
+    :return: Normalized mapping to be stored under the `kwargs` payload key.
+    """
+    logged: dict[str, Any] = {}
+
+    for item in _resolve_fields(
+        field_specs, source_kwargs, verbosity_level=ctx.get_plain_verbosity_level()
+    ):
+        logged[item.alias] = ctx.normalize_value_for_log(
+            item.value,
+            unbounded=item.unbounded_items,
+        )
+
+    return logged
+
+
+def _build_logged_result(
+    *,
+    ctx: LogContextProto,
+    field_specs: tuple[str, ...],
+    result_obj: Any,
+) -> Any:
+    """
+    Build the `result` payload section for the `success` outcome.
+
+    The helper applies `log_result_on_success` field specifications to the returned
+    operation result.
+
+    Behavior depends on the result shape:
+
+    * primitive values are normalized as whole values;
+    * list and tuple results may be selected by index;
+    * dictionary results are normalized as whole dictionaries;
+    * composite objects may be selected by attribute path.
+
+    If no selected fields can be resolved for a list, tuple, or composite object,
+    the helper falls back to whole-result normalization.
+
+    :param ctx: Effective logging context used for value normalization.
+    :param field_specs: Result field specifications. An empty tuple means that the
+        whole result should be logged.
+    :param result_obj: Operation result returned by the decorated callable.
+    :return: Normalized result payload value.
+    """
+    # Simple primitives: ignore specs and log whole result
+    if isinstance(result_obj, (str, int, float, bool)) or result_obj is None:
+        return ctx.normalize_value_for_log(result_obj)
+
+    payload: dict[str, Any] = {}
+
+    # List/tuple: allow indexed specs like "0", "op_id=1", "ttl_ms=2.ttl_ms"
+    if isinstance(result_obj, (list, tuple)):
+        if not field_specs:
+            return ctx.normalize_value_for_log(result_obj)
+
+        for spec in field_specs:
+            spec = spec.strip()
+            if not spec:
+                continue
+
+            # "!" suffix: disable item-count limit for this value
+            unbounded_items = False
+            if spec.endswith("!"):
+                unbounded_items = True
+                spec = spec[:-1].strip()
+                if not spec:
+                    continue
+
+            alias = None
+            if "=" in spec:
+                alias_part, path_part = spec.split("=", 1)
+                alias_candidate = alias_part.strip()
+                path_str = path_part.strip()
+                if alias_candidate:
+                    alias = alias_candidate
+            else:
+                path_str = spec
+
+            if not path_str:
+                continue
+
+            path_parts = [p for p in path_str.split(".") if p]
+            if not path_parts:
+                continue
+
+            head = path_parts[0]
+            try:
+                idx = int(head)
+            except ValueError:
+                # Not an index -> skip for list/tuple mode
+                continue
+
+            if idx < 0 or idx >= len(result_obj):
+                continue
+
+            value = result_obj[idx]
+            failed = False
+            for attr in path_parts[1:]:
+                if attr == "len()":
+                    # noinspection PyBroadException
+                    try:
+                        # noinspection PyTypeChecker
+                        value = len(value)
+                    except Exception:
+                        failed = True
+                        break
+                    continue
+
+                # noinspection PyBroadException
+                try:
+                    value = getattr(value, attr)
+                except Exception:
+                    failed = True
+                    break
+
+            if failed:
+                continue
+
+            if alias is None:
+                # "2.ttl_ms" -> "ttl_ms", "1" -> "item1"
+                alias = path_parts[-1] if len(path_parts) > 1 else f"item{idx}"
+
+            payload[alias] = ctx.normalize_value_for_log(
+                value,
+                unbounded=unbounded_items,
+            )
+
+        if not payload:
+            return ctx.normalize_value_for_log(result_obj)
+
+        return payload
+
+    # Dict: keep old behavior – ignore specs and log whole dict
+    if isinstance(result_obj, dict):
+        return ctx.normalize_value_for_log(result_obj)
+
+    # Composite result: try to pick fields according to specs
+    if not field_specs:
+        # No specs at all -> log composite as "<TypeName>"
+        return ctx.normalize_value_for_log(result_obj)
+
+    for spec in field_specs:
+        spec = spec.strip()
+        if not spec:
+            continue
+
+        # "!" suffix: disable item-count limit for this value
+        unbounded_items = False
+        if spec.endswith("!"):
+            unbounded_items = True
+            spec = spec[:-1].strip()
+            if not spec:
+                continue
+
+        # Parse alias and path
+        alias = None
+        if "=" in spec:
+            alias_part, path_part = spec.split("=", 1)
+            alias_candidate = alias_part.strip()
+            path_str = path_part.strip()
+            if alias_candidate:
+                alias = alias_candidate
+        else:
+            path_str = spec
+
+        if not path_str:
+            continue
+
+        # Split path into attribute chain
+        path_parts = [p for p in path_str.split(".") if p]
+        if not path_parts:
+            continue
+
+        value = result_obj
+        failed = False
+        for attr in path_parts:
+            if attr == "len()":
+                # noinspection PyBroadException
+                try:
+                    # noinspection PyTypeChecker
+                    value = len(value)
+                except Exception:
+                    failed = True
+                    break
+                continue
+
+            # noinspection PyBroadException
+            try:
+                value = getattr(value, attr)
+            except Exception:
+                failed = True
+                break
+
+        if failed:
+            continue
+
+        if alias is None:
+            alias = path_parts[-1]
+
+        payload[alias] = ctx.normalize_value_for_log(
+            value,
+            unbounded=unbounded_items,
+        )
+
+    if not payload:
+        # Nothing resolved -> log composite as "<TypeName>"
+        return ctx.normalize_value_for_log(result_obj)
+
+    return payload
+
+
+# ---------- Decorator ----------
+
+P = ParamSpec("P")
+R = TypeVar("R")
+F = TypeVar("F", bound=Callable[..., Any])
+
+
+LogErrorPolicyRule = tuple[type[BaseException], bool]
+LogErrorPolicy = tuple[LogErrorPolicyRule, ...]
+
+
+def log_invocation(
+    event: str,
+    *,
+    invoke_level: LogLevel = LogLevel.DEBUG,
+    success_level: LogLevel = LogLevel.DEBUG,
+    error_level: LogLevel = LogLevel.ERROR,
+    error_level_suppressed: LogLevel = LogLevel.DEBUG,
+    cancel_level: LogLevel = LogLevel.INFO,
+    log_closures_on_invoke: dict[str, Any] | None = None,
+    context_fields: tuple[str, ...] = (),
+    context_formatter: PayloadFormatter | None = None,
+    log_kwargs_on_invoke: tuple[str, ...] = (),
+    log_result_on_success: tuple[str, ...] | None = None,
+    log_error_policy: LogErrorPolicy = (),
+    ctx: LogContextProto | None = None,
+    entity_id_getter: Callable[[], str] | None = None,
+) -> Callable[[F], F]:
+    """
+    Decorate a public API operation with structured lifecycle logging.
+
+    The decorated callable is treated as one event. The decorator may emit log
+    records for that event with different outcomes:
+
+    * ``invoke`` before the operation body starts;
+    * ``success`` after successful completion;
+    * ``failed`` when the operation raises an ordinary exception;
+    * ``cancelled`` when the operation raises ``asyncio.CancelledError``.
+
+    The decorator does not create or configure a logging context. It either uses
+    the explicit ``ctx`` argument or resolves a context from the first positional
+    argument through ``LogContextProviderProto``.
+
+    The original return value, exception, and cancellation semantics are preserved.
+
+    :param event: event name for the decorated operation. Must match
+        ``^[A-Za-z_.]+$``.
+    :param invoke_level: level used for the ``invoke`` outcome.
+    :param success_level: level used for the ``success`` outcome.
+    :param error_level: level used for a full ``failed`` outcome.
+    :param error_level_suppressed: level used for a suppressed ``failed`` outcome.
+    :param cancel_level: level used for the ``cancelled`` outcome.
+    :param log_closures_on_invoke: values captured from the surrounding scope and
+        added to the ``invoke`` payload under the ``closures`` key.
+    :param context_fields: field specifications resolved for every emitted
+        outcome.
+    :param context_formatter: optional formatter that can shape payload data
+        produced from ``context_fields``.
+    :param log_kwargs_on_invoke: field specifications resolved only for the
+        ``invoke`` outcome and added under the ``kwargs`` payload key.
+    :param log_result_on_success: result logging configuration. ``None`` disables
+        result logging, an empty tuple logs the whole result, and a non-empty tuple
+        selects result fields.
+    :param log_error_policy: rules controlling whether matching exception types
+        produce a full or suppressed ``failed`` outcome.
+    :param ctx: explicit logging context. If omitted, the decorator resolves the
+        context from the first positional argument.
+    :param entity_id_getter: optional zero-argument callable used to provide
+        ``LogEventMeta.entity_id``. If omitted, the decorator tries to resolve an
+        identity from the first positional argument.
+    :return: a decorator that wraps the target callable.
+    :raises ValueError: if ``event`` has an invalid name.
+    :raises RuntimeError: if no logging context can be resolved when the decorated
+        callable is invoked.
+    """
+
+    def decorate(func: F) -> F:
+
+        sig = inspect.signature(func)
+
+        if not _EVENT_RE.fullmatch(event):
+            raise ValueError(f"Invalid event name: {event!r}")
+
+        def _emit_invoke(
+            effective_ctx: LogContextProto,
+            event_meta: LogEventMeta,
+            effective_kwargs: dict[str, Any],
+        ) -> None:
+            invoke_data: dict[str, Any] = {}
+
+            if log_closures_on_invoke:
+                closures: dict[str, Any] = {}
+                for key, value in log_closures_on_invoke.items():
+                    # noinspection PyBroadException
+                    try:
+                        closures[key] = effective_ctx.normalize_value_for_log(value)
+                    except Exception:
+                        closures[key] = "<unknown>"
+                if closures:
+                    invoke_data["closures"] = closures
+
+            _inject_context_payload(
+                ctx=effective_ctx,
+                event=event,
+                event_outcome=_InvocationEventType.INVOKE,
+                field_specs=context_fields,
+                source_kwargs=effective_kwargs,
+                payload_formatter=context_formatter,
+                target_payload=invoke_data,
+            )
+
+            if log_kwargs_on_invoke:
+                kwargs_payload = _build_logged_kwargs(
+                    ctx=effective_ctx,
+                    field_specs=log_kwargs_on_invoke,
+                    source_kwargs=effective_kwargs,
+                )
+                if kwargs_payload:
+                    invoke_data["kwargs"] = kwargs_payload
+
+            effective_ctx.emit_log_event(
+                LogEvent(
+                    level=invoke_level,
+                    meta=event_meta,
+                    event_outcome=_InvocationEventType.INVOKE.value,
+                    timestamp=time.time(),
+                    payload=invoke_data,
+                )
+            )
+
+        def _emit_cancelled(
+            effective_ctx: LogContextProto,
+            event_meta: LogEventMeta,
+            effective_kwargs: dict[str, Any],
+            err: BaseException,
+        ) -> None:
+
+            if effective_ctx.is_error_logged(err):
+                return
+
+            payload: dict[str, Any] = {
+                "cancelled": True,
+                "error": effective_ctx.build_error_payload(err),
+            }
+
+            _inject_context_payload(
+                ctx=effective_ctx,
+                event=event,
+                event_outcome=_InvocationEventType.CANCELLED,
+                field_specs=context_fields,
+                source_kwargs=effective_kwargs,
+                payload_formatter=context_formatter,
+                target_payload=payload,
+            )
+
+            effective_ctx.emit_log_event(
+                LogEvent(
+                    level=cancel_level,
+                    meta=event_meta,
+                    event_outcome=_InvocationEventType.CANCELLED.value,
+                    timestamp=time.time(),
+                    payload=payload,
+                )
+            )
+
+            effective_ctx.mark_error_logged(err)
+
+        def _emit_failed(
+            effective_ctx: LogContextProto,
+            event_meta: LogEventMeta,
+            effective_kwargs: dict[str, Any],
+            err: Exception,
+        ) -> None:
+            payload: dict[str, Any] = {}
+
+            _inject_context_payload(
+                ctx=effective_ctx,
+                event=event,
+                event_outcome=_InvocationEventType.FAILED,
+                field_specs=context_fields,
+                source_kwargs=effective_kwargs,
+                payload_formatter=context_formatter,
+                target_payload=payload,
+            )
+
+            policy_applied = False
+
+            if log_error_policy:
+                for exc_type, force_log in log_error_policy:
+                    if isinstance(err, exc_type):
+                        policy_applied = True
+                        if force_log:
+                            payload["error"] = effective_ctx.build_error_payload(err)
+
+                            effective_ctx.emit_log_event(
+                                LogEvent(
+                                    level=error_level,
+                                    meta=event_meta,
+                                    event_outcome=_InvocationEventType.FAILED.value,
+                                    timestamp=time.time(),
+                                    payload=payload,
+                                )
+                            )
+                            effective_ctx.mark_error_logged(err)
+                        else:
+                            effective_ctx.emit_log_event(
+                                LogEvent(
+                                    level=error_level_suppressed,
+                                    meta=event_meta,
+                                    event_outcome=_InvocationEventType.FAILED.value,
+                                    timestamp=time.time(),
+                                    payload=payload,
+                                )
+                            )
+
+                            effective_ctx.mark_error_logged(err)
+                        break
+
+            if not policy_applied:
+                if not effective_ctx.is_error_logged(err):
+                    payload["error"] = effective_ctx.build_error_payload(err)
+                    effective_ctx.emit_log_event(
+                        LogEvent(
+                            level=error_level,
+                            meta=event_meta,
+                            event_outcome=_InvocationEventType.FAILED.value,
+                            timestamp=time.time(),
+                            payload=payload,
+                        )
+                    )
+
+                    effective_ctx.mark_error_logged(err)
+                else:
+                    effective_ctx.emit_log_event(
+                        LogEvent(
+                            level=error_level_suppressed,
+                            meta=event_meta,
+                            event_outcome=_InvocationEventType.FAILED.value,
+                            timestamp=time.time(),
+                            payload=payload,
+                        )
+                    )
+
+        def _emit_success(
+            effective_ctx: LogContextProto,
+            event_meta: LogEventMeta,
+            effective_kwargs: dict[str, Any],
+            result: Any,
+        ) -> None:
+            payload: dict[str, Any] = {}
+
+            _inject_context_payload(
+                ctx=effective_ctx,
+                event=event,
+                event_outcome=_InvocationEventType.SUCCESS,
+                field_specs=context_fields,
+                source_kwargs=effective_kwargs,
+                payload_formatter=context_formatter,
+                target_payload=payload,
+            )
+
+            if log_result_on_success is not None:
+                payload["result"] = _build_logged_result(
+                    ctx=effective_ctx,
+                    field_specs=log_result_on_success,
+                    result_obj=result,
+                )
+
+            effective_ctx.emit_log_event(
+                LogEvent(
+                    level=success_level,
+                    meta=event_meta,
+                    event_outcome=_InvocationEventType.SUCCESS.value,
+                    timestamp=time.time(),
+                    payload=payload,
+                )
+            )
+
+        if inspect.iscoroutinefunction(func):
+
+            @wraps(func)
+            async def wrapped_async(*args: Any, **kwargs: Any) -> Any:
+                effective_kwargs = _extract_func_arguments(sig, args, kwargs)
+
+                effective_ctx = ctx if ctx is not None else _resolve_context(args)
+
+                entity_id = entity_id_getter() if entity_id_getter else _resolve_entity_id(args)
+
+                event_meta = LogEventMeta(
+                    event_namespace=effective_ctx.namespace,
+                    event_name=event,
+                    entity_id=entity_id,
+                    source_path=None,
+                    source_line=None,
+                    source_func=None,
+                )
+
+                event_enabled = effective_ctx.is_event_enabled(event_meta)
+
+                if event_enabled:
+                    _emit_invoke(effective_ctx, event_meta, effective_kwargs)
+
+                try:
+                    result = await func(*args, **kwargs)
+
+                except asyncio.CancelledError as err:
+                    _emit_cancelled(effective_ctx, event_meta, effective_kwargs, err)
+                    raise
+                except Exception as err:
+                    _emit_failed(effective_ctx, event_meta, effective_kwargs, err)
+                    raise
+                else:
+                    if event_enabled:
+                        _emit_success(effective_ctx, event_meta, effective_kwargs, result)
+                    return result
+
+            # noinspection PyUnnecessaryCast
+            return cast(F, wrapped_async)
+
+        @wraps(func)
+        def wrapped_sync(*args: Any, **kwargs: Any) -> Any:
+            effective_kwargs = _extract_func_arguments(sig, args, kwargs)
+
+            effective_ctx = ctx if ctx is not None else _resolve_context(args)
+            entity_id = entity_id_getter() if entity_id_getter else _resolve_entity_id(args)
+
+            event_meta = LogEventMeta(
+                event_namespace=effective_ctx.namespace,
+                event_name=event,
+                entity_id=entity_id,
+                source_path=None,
+                source_line=None,
+                source_func=None,
+            )
+
+            event_enabled = effective_ctx.is_event_enabled(event_meta)
+
+            if event_enabled:
+                _emit_invoke(effective_ctx, event_meta, effective_kwargs)
+
+            try:
+                result = func(*args, **kwargs)
+            except asyncio.CancelledError as err:
+                _emit_cancelled(effective_ctx, event_meta, effective_kwargs, err)
+                raise
+            except Exception as err:
+                _emit_failed(effective_ctx, event_meta, effective_kwargs, err)
+                raise
+
+            if inspect.isawaitable(result):
+
+                async def _await_and_log() -> Any:
+                    try:
+                        awaited = await cast(Awaitable[Any], result)
+                    except asyncio.CancelledError as exc:
+                        _emit_cancelled(effective_ctx, event_meta, effective_kwargs, exc)
+                        raise
+                    except Exception as exc:
+                        _emit_failed(effective_ctx, event_meta, effective_kwargs, exc)
+                        raise
+                    else:
+                        if event_enabled:
+                            _emit_success(effective_ctx, event_meta, effective_kwargs, awaited)
+                        return awaited
+
+                return _await_and_log()
+
+            if event_enabled:
+                _emit_success(effective_ctx, event_meta, effective_kwargs, result)
+            return result
+
+        # noinspection PyUnnecessaryCast
+        return cast(F, wrapped_sync)
+
+    return decorate

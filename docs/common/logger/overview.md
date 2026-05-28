@@ -1,0 +1,222 @@
+# Logger
+```{contents} Contents:
+:depth: 1
+:local:
+```
+`MVX Logger` is a lightweight-to-use structured event logging layer for Python code.
+
+It exists because there is a practical gap between simple logging helpers and full observability platforms.
+
+Python's standard `logging` package is mature, stable, and very useful as an output infrastructure. However, its core model is centered around `LogRecord` objects and formatted messages. Many structured logging libraries improve the output shape, for example by producing JSON or attaching additional fields, but they often leave the larger problem unresolved: operation lifecycle logging, event selection, payload depth, domain object serialization, and event delivery remain scattered across user code.
+
+At the other end, full observability stacks provide powerful capabilities, but they usually require infrastructure, configuration, collectors, backends, operational decisions, and additional expertise. For many projects, this is often too heavy as a required foundation.
+
+`MVX Logger` is designed for the middle ground.
+
+It should be small at the point of use: get a `LogContext`, attach `log_invocation`, configure a sink. Internally, however, it is built around a formal event model rather than formatted strings.
+
+## Core idea
+
+In `MVX Logger`, code does not format log strings, instead it emits structured events.
+
+An event consists of two parts.
+
+The first part is event metadata used for event selection:
+
+- namespace;
+- event name;
+- entity id;
+- source metadata.
+
+The second part is the emitted log event data:
+
+- level;
+- event type;
+- timestamp;
+- payload.
+
+The payload may be minimal or detailed. It may contain operation arguments, a result, an error, object state, or any other data that is meaningful for a particular event.
+
+The important distinction is that an event is not tied to its destination. The same `LogEvent` may be written to stderr, written to a file, sent to Redis, stored in PostgreSQL, delivered to syslog, or forwarded to an external collector. The code that creates the event does not know where the event will go.
+
+## Logging width and depth
+
+`MVX Logger` separates two different questions: **which events should be logged** and **how much detail should be included in them**.
+
+### Width
+
+Logging width answers the question:
+
+> Which events should be written to the log?
+
+This is controlled by policies.
+
+A policy may allow or reject an event by its metadata: namespace, event name, entity id, or source location. The policy does not inspect payload, level, event type, or timestamp.
+
+This makes it possible to control which parts of a library are verbose, which parts are quiet, and which parts are enabled only in diagnostic mode.
+
+For operation-style logging, the policy controls whether the ordinary invocation event is enabled. Failure and cancellation are treated as error-path outcomes by `log_invocation`.
+
+For example, a policy may enable only selected namespaces, suppress noisy event names, or enable diagnostics for a particular entity or source location.
+
+### Depth
+
+Logging depth answers a different question:
+
+> How much data should be placed into the event payload?
+
+Depth is controlled by a separate component called a payload processor. This approach keeps log payload normalization encapsulated in a centrally controlled component, independent from event filtering mechanics and delivery. Thus, the `event policy` controls which events are allowed to be logged, while the payload processor controls how much data is placed into the event payload and how this data should be normalized.
+
+The package includes a default implementation of the payload processor, `LogPayloadProcessor`. It is intended to cover the usual logging-depth requirements out of the box. It can produce more compact or more detailed payloads depending on the selected verbosity level, keep very long strings and large collections under control, and ask domain objects for their own log representation when they provide one.
+
+The default processor also supports external adapters for objects that cannot or should not implement logging methods themselves. Errors are handled separately, so structured exceptions can expose useful diagnostic details without turning every exception into an opaque string. Large or sensitive values can be shortened or masked before they reach the final `LogEvent`.
+
+For cases where the default behavior is not enough, a custom payload processor can be implemented and used inside the logger infrastructure.
+
+After the event policy accepts an event, `LogContext` delegates payload normalization to the configured payload processor. The normalized payload is then placed into the final `LogEvent` and delivered to a sink.
+
+## LogContext as the entry point
+
+The main entry point into the logging infrastructure is `LogContext`.
+
+If the standard `logging.Logger` is the usual entry point for message-based logs, then `LogContext` is the MVX entry point for structured event logs.
+
+`LogContext` is responsible for several tasks:
+
+- accepting an event;
+- building event metadata;
+- applying the event selection policy to that metadata;
+- normalizing the payload for accepted events via the payload processor;
+- building the final `LogEvent`;
+- handling logging errors according to policy;
+- passing the event to a sink.
+
+At the same time, `LogContext` keeps the familiar idea of namespaces and inheritance. A context can be retrieved by name, specific namespaces can be configured, and the logger works with a default bootstrap state out of the box.
+
+User code does not have to assemble the whole logging infrastructure manually before the first use. A base context exists immediately, and more specific configuration can be added later.
+
+## Thread-safe by design
+
+`MVX Logger` is designed to be safe to use from multiple threads.
+
+This matters because the logger may be called from synchronous code, asynchronous code, worker threads, background tasks, callbacks, or cleanup paths. The code that emits an event should not have to coordinate global logging state manually.
+
+The public logging path is built around this expectation: code creates or hands off a structured event, and the logging infrastructure coordinates context access, sink registration, and sink delivery boundaries.
+
+For simple sinks, delivery may happen synchronously. For asynchronous sinks, the caller can hand off an event quickly, while the sink performs buffering and delivery inside its own runtime. In both cases, the user-facing contract is the same: logging code should not need to know which thread or delivery mechanism is behind the sink.
+
+## Sinks only deliver events
+
+`MVX Logger` deliberately separates event creation from event delivery.
+
+The code that logs does not know where the event will be sent.
+
+`LogContext` does not know how exactly the sink delivers the event.
+
+A sink does not know why the event was created or which domain operation it describes.
+
+A sink receives a completed `LogEvent` and delivers it.
+
+A simple sink may synchronously write the event to a stream or a file. A more complex sink may buffer events and deliver them asynchronously to PostgreSQL, Redis, syslog, an HTTP endpoint, or another external backend.
+
+This allows the delivery mechanism to change without changing the code that creates events.
+
+## Asynchronous sinks as a growth path
+
+One of the important goals of `MVX Logger` is to provide a foundation for complex sinks that cannot simply write data synchronously in the caller's thread.
+
+Examples include:
+
+* PostgreSQL sink;
+* Redis sink;
+* syslog over TCP/TLS;
+* HTTP exporter;
+* remote collector;
+* batch writer.
+
+For these scenarios, the logging code should remain fast. It hands off an event synchronously and continues working. Everything else is handled by the sink: buffering, backpressure, delivery, flush, stop, and error handling.
+
+This is especially important for async libraries. Logging should not turn domain code into a mix of business logic, network I/O, and manual queue management.
+
+## log_invocation
+
+`log_invocation` is one of the main practical tools provided by `MVX Logger`.
+
+It allows operation logging to be described declaratively, through a decorator, instead of turning a function body into a sequence of manual `log()` calls.
+
+A typical operation has a lifecycle:
+
+* it is invoked;
+* it completes successfully;
+* it fails with an error;
+* it is cancelled.
+
+`log_invocation` turns this lifecycle into standardized events types:
+
+* `invoke`;
+* `success`;
+* `failed`;
+* `cancelled`.
+
+It can be configured to control:
+
+* which function arguments are included in the payload;
+* which values are taken from context or closure;
+* whether the result should be logged;
+* how errors should be serialized;
+* which level should be used for each event;
+* how payload generation is tied to `verbosity_level`;
+* when a custom payload builder should be used.
+
+The function body remains clean. It performs its own work instead of manually assembling log records.
+
+Example:
+
+```python
+from mvx.common.logger import log_invocation
+from dataclasses import dataclass
+
+@dataclass
+class BindOutcome:
+    result: bool
+    error: Exception | None
+
+@log_invocation(
+    event="ldap.bind",
+    log_kwargs_on_invoke=("user_dn",),
+    log_result_on_success=("ok=result",),
+)
+async def bind(self, *, user_dn: str, password: str) -> BindOutcome:
+    ...
+```
+
+The function does not know where the events will be delivered. It does not know whether they will be logged at all. It does not know how detailed the serialized result will be.
+
+It simply performs the operation.
+
+For the ordinary invocation path, the event policy decides whether invocation logging is enabled by checking event metadata. If it is enabled, `log_invocation` builds log-ready payloads for `invoke` and `success`.
+
+Failure and cancellation are handled as error-path outcomes and are emitted independently of the ordinary invocation policy.
+
+The sink receives the final `LogEvent` and delivers it.
+
+## What MVX Logger is not
+
+- `MVX Logger` is not a replacement for the standard `logging` package. It uses standard `logging` as one delivery mechanism.
+- `MVX Logger` is not just a JSON formatter. Its primary unit is an event, not a formatted message wrapped into a structured output format.
+- `MVX Logger` is not a full observability platform. It does not require a collector, a separate backend, an agent, a deployment model, or external infrastructure.
+
+`MVX Logger` is an event logging layer for regular Python projects. Its purpose is to standardize how code creates events, how logging width is selected, how payload depth is controlled, and how delivery is separated from the code that logs.
+
+
+```{toctree}
+:caption: What to read next
+:maxdepth: 1
+
+from_the_author
+getting_started/index
+architecture/overview
+log_components/index
+advanced_usage/index
+api/index
+```

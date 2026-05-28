@@ -1,4 +1,9 @@
 # InvalidFunctionArgumentError
+```{contents} Contents:
+:depth: 4
+:local:
+```
+
 
 `InvalidFunctionArgumentError` is a structured error for function argument
 validation failures.

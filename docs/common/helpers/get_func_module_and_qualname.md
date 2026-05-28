@@ -1,10 +1,4 @@
-# Function introspection helpers
-
-This module provides small useful helpers.
-
-These helpers are typically used in logging, error processing, and diagnostics.
-
-## get_func_module_and_qualname
+# get_func_module_and_qualname
 
 Returns the module and qualified name of a callable.
 
@@ -43,13 +37,7 @@ module = "__main__"
 qualname = "Service.method"
 ```
 
-## Fallback behavior
-
+```{note} Fallback behavior
 If the callable does not provide `__module__` or `__qualname__`, the helper
-returns:
-
-```text
-<unknown>
+returns: <unknown>. This keeps the result stable and safe for logging.
 ```
-
-This keeps the result stable and safe for logging.
