@@ -28,7 +28,7 @@ def make_event(
     level: int = logging.INFO,
     event_namespace: str | None = "mvx.test",
     event_name: str = "event.done",
-    event_type: str | None = "operation",
+    event_outcome: str | None = "operation",
     timestamp: float = 1_700_000_000.123,
     entity_id: str | None = "entity-1",
     payload: Mapping[str, Any] | None = None,
@@ -46,7 +46,7 @@ def make_event(
             source_line=source_line,
             source_func=source_func,
         ),
-        event_type=event_type,
+        event_outcome=event_outcome,
         timestamp=timestamp,
         payload=payload if payload is not None else {"result": "ok"},
     )
@@ -358,7 +358,7 @@ def test_d03_log_uses_logger_name_in_record(capsys: pytest.CaptureFixture[str]) 
 def test_d04_log_uses_custom_formatter_fields(capsys: pytest.CaptureFixture[str]) -> None:
     config = LoggingStreamConfig(
         stream_output=LogStreamOutput.STDOUT,
-        log_format="%(event_name)s:%(event_type)s:%(entity_id)s:%(payload)s",
+        log_format="%(event_name)s:%(event_outcome)s:%(entity_id)s:%(payload)s",
     )
     sink = StreamLogSink(config=config)
 
@@ -376,7 +376,7 @@ def test_d05_log_handles_missing_optional_event_fields(
 ) -> None:
     config = LoggingStreamConfig(
         stream_output=LogStreamOutput.STDOUT,
-        log_format="%(event_namespace)s:%(event_type)s:%(entity_id)s:%(message)s",
+        log_format="%(event_namespace)s:%(event_outcome)s:%(entity_id)s:%(message)s",
     )
     sink = StreamLogSink(config=config)
 
@@ -385,7 +385,7 @@ def test_d05_log_handles_missing_optional_event_fields(
             make_event(
                 event_namespace=None,
                 entity_id=None,
-                event_type=None,
+                event_outcome=None,
             )
         )
         captured = capsys.readouterr()

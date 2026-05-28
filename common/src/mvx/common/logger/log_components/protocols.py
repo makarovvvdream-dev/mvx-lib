@@ -12,40 +12,37 @@ class LogContextProto(Protocol):
 
     def is_event_enabled(self, event: LogEventMeta) -> bool:
         """
-        Determines whether a specific event is enabled for logging.
+        Return whether the event described by the given metadata is enabled.
 
-        This method checks the applied log policy to determine if the
-        specified event is enabled for logging or not and returns a boolean value accordingly.
+        `log_invocation` calls this method before emitting normal operation
+        tracing outcomes such as `invoke` and `success`.
 
-        :param event: The event to check.
-        :type event: LogEventMeta
+        :param event: event metadata to check.
         :return: True if the event is enabled, False otherwise.
-        :rtype: bool
         """
         ...
 
     def get_plain_verbosity_level(self) -> str | None:
         """
-        Retrieves the verbosity level in plain text format.
+        Return the current verbosity level as a plain string.
 
-        This method is used to fetch the verbosity level in its plain text representation
-        if it is set. If the verbosity level is not specified, it returns None.
+        `log_invocation` uses this value to evaluate verbosity-gated field
+        specifications such as `MAXIMUM:payload` or
+        `NORMAL,MAXIMUM:request_id`.
 
-        :return: The verbosity level as a string if set, or None if not specified.
-        :rtype: str | None
+        :return: the current plain verbosity level, or None if no level is set.
         """
         ...
 
     @property
     def namespace(self) -> str:
         """
-        Provides access to the namespace associated with the context.
+        Return the namespace used for events emitted through this context.
 
-        The namespace is a string identifier that can be used to distinguish the
-        context or scope for certain operations or data within the object.
+        `log_invocation` copies this value into `LogEventMeta.event_namespace`
+        when building metadata for the decorated operation.
 
-        :return: The namespace as a string.
-        :rtype: str
+        :return: the context namespace.
         """
 
     def normalize_value_for_log(
@@ -55,45 +52,51 @@ class LogContextProto(Protocol):
         unbounded: bool = False,
     ) -> str | int | float | bool | bytes | dict[str, Any] | list[Any] | None:
         """
-        Normalize a value for logging purposes by converting it into a form suitable
-        for inclusion in log messages. The method ensures that the transformed value
-        is serializable and comprehensible in logs.
+        Normalize a single value for inclusion in a log payload.
 
-        :param value: The input value to normalize. It can be of any type.
-        :param unbounded: A flag indicating whether the value can be transformed
-            into an unbounded representation (e.g., raw data without truncation).
-            Defaults to False.
-        :return: The normalized value. It can be of one of the following types:
-            str, int, float, bool, bytes, dictionary with string keys, list, or None.
+        `log_invocation` uses this method for selected argument values,
+        context fields, closure values, and selected result values.
+
+        :param value: value to normalize.
+        :param unbounded: whether item-count limiting should be disabled for
+            this value.
+        :return: the normalized log-ready value.
         """
         ...
 
     def build_error_payload(self, err: BaseException) -> Mapping[str, Any]:
         """
-        Builds a payload for logging an error
+        Build a structured payload for an exception.
 
-        :param err: The exception instance to build the payload for.
-        :type err: BaseException
-        :return: A dictionary containing the error payload.
+        `log_invocation` uses this method for full `failed` outcomes and for
+        emitted `cancelled` outcomes.
+
+        :param err: exception instance to describe.
+        :return: structured error payload.
         """
         ...
 
     def is_error_logged(self, err: BaseException) -> bool:
         """
-        Determines whether an error should be logged based on its type and message.
+        Return whether the exception instance is already marked as logged.
 
-        :param err: The exception instance to check.
-        :type err: BaseException
-        :return: True if the error should be logged, False otherwise.
+        `log_invocation` uses this marker to suppress repeated detailed error
+        payloads for the same exception instance.
+
+        :param err: exception instance to check.
+        :return: True if the exception is already marked as logged.
         """
         ...
 
     def mark_error_logged(self, err: BaseException) -> None:
         """
-        Marks an error as logged, preventing it from being logged again.
+        Mark the exception instance as already logged.
 
-        :param err: The exception instance to mark as logged.
-        :type err: BaseException
+        `log_invocation` calls this after emitting a full error payload or
+        after applying an explicit error policy rule.
+
+        :param err: exception instance to mark.
+        :return: None.
         """
         ...
 
@@ -102,16 +105,17 @@ class LogContextProto(Protocol):
         event: LogEvent,
     ) -> None:
         """
-        Emit a fully prepared log event to the configured sink.
+        Emit a fully prepared log event.
 
-        This method does not apply the event policy and does not perform payload
-        normalization. The caller is responsible for deciding whether the event
-        should be emitted and for providing a log-ready payload.
+        This method is the final boundary used by `log_invocation`. The event
+        metadata, outcome, timestamp, level, and payload have already been
+        prepared by the caller.
 
-        :param event: The prepared log event to emit.
-        :type event: LogEvent
-        :return: None
-        :rtype: None
+        This method does not apply event selection for `log_invocation` and
+        does not build the operation payload.
+
+        :param event: prepared log event to emit.
+        :return: None.
         """
         ...
 
@@ -123,12 +127,13 @@ class LogContextProto(Protocol):
 class LogContextProviderProto(Protocol):
     def get_log_context(self) -> LogContextProto:
         """
-        Retrieve the logging context.
+        Return the logging context for this object.
 
-        This method provides the context information required for logging purposes.
+        `log_invocation` uses this protocol for method-based context
+        resolution. For instance methods, the first positional argument is
+        usually `self`, and this method supplies the effective context.
 
-        :return: The logging context for the current operation.
-        :rtype: LogContextProto
+        :return: logging context used by the decorated operation.
         """
         ...
 
@@ -142,10 +147,11 @@ class LogEntityIdProviderProto(Protocol):
     @property
     def identity(self) -> str:
         """
-        Retrieves the identity of the object. The identity is a unique identifier that
-        represents the current instance.
+        Return the stable entity identifier for this object.
 
-        :return: The unique identifier as a string.
-        :rtype: str
+        `log_invocation` uses this value as `LogEventMeta.entity_id` when no
+        explicit `entity_id_getter` is supplied.
+
+        :return: entity identifier.
         """
         ...

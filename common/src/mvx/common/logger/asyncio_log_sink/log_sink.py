@@ -1,5 +1,6 @@
 # src/mvx/common/logger/asyncio_log_sink/log_sink.py
 from __future__ import annotations
+from enum_tools.documentation import document_enum
 
 from typing import Any
 from collections.abc import Generator
@@ -12,7 +13,7 @@ import asyncio
 import concurrent.futures
 import contextlib
 
-from ..models import LogEvent, LogSinkProto, LogSinkTerminator
+from ..models import LogEvent, LogSinkProto, LogSinkTerminator, LogSinkDescriptor
 from ..helpers import log_internal_error as _log_internal_error
 
 from .common import AsyncioLogSinkState
@@ -39,32 +40,73 @@ __all__ = (
 DEFAULT_NAMESPACE = "mvx.common.logger.asyncio_log_sink"
 
 
+@document_enum
 class AsyncioLogSinkQueueOverflowPolicy(StrEnum):
+    """
+    Queue overflow behavior for `AsyncioLogSink`.
+    """
+
+    #: Drop an event when the pending-event limit is reached.
     DROP = "DROP"
+
+    #: Raise `AsyncioLogSinkQueueOverflowError` when the pending-event limit is reached.
     RAISE_ERROR = "RAISE_ERROR"
 
 
 DEFAULT_QUEUE_MAX_SIZE = 10_000
 
 
+@document_enum
 class AsyncioLogSinkOp(StrEnum):
+    """
+    Lifecycle operation names reported by `AsyncioLogSinkOpResult`.
+    """
+
+    #: Start operation.
     START = "START"
+
+    #: Stop operation.
     STOP = "STOP"
 
 
 @dataclass(frozen=True, slots=True)
 class AsyncioLogSinkOpResult:
+    """
+    Result of an `AsyncioLogSink` lifecycle operation.
+
+    :param op_name: lifecycle operation name.
+    :param success: whether the operation completed successfully.
+    :param error: operation error, or None if the operation succeeded.
+    """
+
     op_name: AsyncioLogSinkOp
     success: bool
     error: AsyncioLogSinkError | None = None
 
 
 class AsyncioLogSinkWaitHandle:
+    """
+    Wait handle returned by `AsyncioLogSink.start()` and `AsyncioLogSink.stop()`.
+
+    The handle can be used synchronously through `wait()` or awaited from async
+    code. Both forms return `AsyncioLogSinkOpResult`.
+    """
+
     def __init__(self, operation: AsyncioLogSinkOp) -> None:
+        """
+        Create a wait handle for a lifecycle operation.
+
+        :param operation: lifecycle operation represented by this handle.
+        """
         self._future: concurrent.futures.Future[None] = concurrent.futures.Future()
         self._operation = operation
 
     def wait(self) -> AsyncioLogSinkOpResult:
+        """
+        Wait synchronously for the lifecycle operation to finish.
+
+        :return: lifecycle operation result.
+        """
         try:
             self._future.result()
         except Exception as exc:
@@ -133,6 +175,19 @@ DEFAULT_PENDING_TASKS_CANCEL_TIMEOUT_S = 5.0
 
 
 class AsyncioLogSink(ABC):
+    """
+    Base class for sinks with asynchronous delivery.
+
+    `AsyncioLogSink` preserves the synchronous `LogSinkProto.log(event)` boundary
+    while moving actual delivery into an asyncio dispatcher.
+
+    The class provides lifecycle management, thread-safe event acceptance, lazy
+    startup, pending-event accounting, overflow handling, flushing, dispatcher
+    failure handling, and package-managed threaded runtime creation.
+
+    Subclasses must implement `_dispatch_core()`. They may override `_on_starting()`
+    and `_on_stopped()` to manage backend resources.
+    """
 
     _state: AsyncioLogSinkState
 
@@ -147,7 +202,21 @@ class AsyncioLogSink(ABC):
         queue_max_size: int | None = None,
         queue_overflow_policy: AsyncioLogSinkQueueOverflowPolicy = AsyncioLogSinkQueueOverflowPolicy.RAISE_ERROR,
     ) -> None:
+        """
+        Create an async sink bound to the current running event loop.
 
+        Direct construction requires a running event loop in the current thread.
+        Package-managed creation through `create()` builds a dedicated event loop
+        thread and constructs the sink inside it.
+
+        :param namespace: optional namespace used for internal runtime task names.
+        :param queue_max_size: optional maximum number of pending accepted events. If
+            omitted, `DEFAULT_QUEUE_MAX_SIZE` is used.
+        :param queue_overflow_policy: behavior used when the pending-event limit is
+            reached.
+        :raises AsyncioLogSinkEventLoopUnavailableError: if no running event loop is
+            available in the current thread.
+        """
         self._namespace = namespace or DEFAULT_NAMESPACE
 
         try:
@@ -178,10 +247,24 @@ class AsyncioLogSink(ABC):
     # ---- Lifecycle public API ------------------------------------------------------------
 
     def get_status(self) -> AsyncioLogSinkState:
+        """
+        Return the current lifecycle state.
+
+        :return: current sink state.
+        """
         with self._thread_lock:
             return self._state
 
     def start(self) -> AsyncioLogSinkWaitHandle:
+        """
+        Start the async sink runtime.
+
+        The method schedules startup on the sink event loop and returns immediately
+        with a wait handle. If startup is already in progress, the returned handle is
+        attached to the same startup operation.
+
+        :return: wait handle for the start operation.
+        """
         handle = _WaitHandleInternal(operation=AsyncioLogSinkOp.START)
 
         with self._thread_lock:
@@ -208,6 +291,17 @@ class AsyncioLogSink(ABC):
         return handle
 
     def stop(self) -> AsyncioLogSinkWaitHandle:
+        """
+        Stop the async sink runtime.
+
+        The method schedules shutdown on the sink event loop and returns immediately
+        with a wait handle. Stop is valid only when the sink is running.
+
+        Shutdown flushes accepted events on a best-effort basis, stops the dispatcher,
+        and runs the stop hook.
+
+        :return: wait handle for the stop operation.
+        """
         handle = _WaitHandleInternal(operation=AsyncioLogSinkOp.STOP)
 
         with self._thread_lock:
@@ -279,14 +373,12 @@ class AsyncioLogSink(ABC):
 
     async def _on_starting(self) -> None:
         """
-        This method is an internal hook that is invoked asynchronously during the
-        startup process before dispatcher is started. It is designed as an extension point for
-        fulfilling any startup requirements, such as starting connection for external log
-        collection system. This method does not accept any parameters and does not return
-        any value.
+        Run backend-specific startup logic.
 
-        :return: None
-        :rtype: None
+        This hook is called before the dispatcher is started. Subclasses may override
+        it to open connections, create clients, or prepare backend resources.
+
+        :return: None.
         """
         pass
 
@@ -378,14 +470,13 @@ class AsyncioLogSink(ABC):
 
     async def _on_stopped(self) -> None:
         """
-        This method is an internal hook that is invoked asynchronously during the
-        stopping process after dispatcher has been stopped. It is designed as an extension
-        fulfilling any stopping requirements, such as closing connection for external log
-        collection system. This method does not accept any parameters and does not return
-        any value.
+        Run backend-specific shutdown logic.
 
-        :return: None
-        :rtype: None
+        This hook is called after the dispatcher has stopped during normal shutdown.
+        Subclasses may override it to close connections, clients, handlers, or other
+        backend resources.
+
+        :return: None.
         """
         pass
 
@@ -393,6 +484,15 @@ class AsyncioLogSink(ABC):
 
     @abstractmethod
     async def _dispatch_core(self, event: LogEvent) -> None:
+        """
+        Deliver one event to the backend.
+
+        Subclasses must implement this method. It is called by the dispatcher task for
+        each accepted event.
+
+        :param event: prepared event to deliver.
+        :return: None.
+        """
         raise NotImplementedError()
 
     async def _dispatching_loop(self, queue: asyncio.Queue[LogEvent]) -> None:
@@ -454,15 +554,20 @@ class AsyncioLogSink(ABC):
 
     def log(self, event: LogEvent) -> None:
         """
-        Accept a log event without waiting for sink startup or delivery.
+        Accept a log event for asynchronous delivery.
 
-        This method is intentionally non-blocking. If the sink is still VIRGIN,
-        it triggers lazy startup on a best-effort basis and enqueues the event
-        anyway. Events accepted during STARTING remain buffered and will be
-        dispatched once the dispatcher is created.
+        This method is thread-safe and designed for the logging hot path. It performs
+        state checks, pending-event accounting, optional lazy startup, and thread-safe
+        queue handoff. It does not wait for actual backend delivery.
 
-        The method only rejects events when the sink is stopping, stopped,
-        cancelled, failed, or when the local pending limit is exceeded.
+        Accepted events are delivered later by the dispatcher task.
+
+        :param event: prepared event to accept.
+        :return: None.
+        :raises AsyncioLogSinkInvalidStateError: if the sink cannot accept events in
+            its current state.
+        :raises AsyncioLogSinkQueueOverflowError: if the pending-event limit is reached
+            and overflow policy is `RAISE_ERROR`.
         """
 
         with self._thread_lock:
@@ -516,7 +621,38 @@ class AsyncioLogSink(ABC):
             raise
 
     @classmethod
+    def build_descriptor(cls, **kwargs: Any) -> LogSinkDescriptor:
+        """
+        Build a descriptor for this async sink configuration.
+
+        Subclasses that participate in package-level sink registration must
+        override this method.
+
+        :param kwargs: sink-specific configuration arguments.
+        :return: sink descriptor.
+        :raises NotImplementedError: always raised by the base class.
+        """
+        raise NotImplementedError(
+            f"{cls.__name__}.build_descriptor() must be implemented by subclasses"
+        )
+
+    @classmethod
     def create(cls, **kwargs: Any) -> tuple[LogSinkProto, LogSinkTerminator]:
+        """
+        Create a package-managed async sink with a dedicated event loop thread.
+
+        The method starts a new thread, creates an event loop inside it, constructs the
+        sink on that loop, starts the sink, and returns the sink with an idempotent
+        terminator.
+
+        The returned terminator stops the sink runtime, schedules event loop shutdown,
+        joins the runtime thread, and raises any termination error.
+
+        :param kwargs: arguments passed to the sink constructor.
+        :return: pair containing the created sink and its terminator.
+        :raises RuntimeError: if runtime creation, sink bootstrap, sink startup, or
+            runtime shutdown setup fails.
+        """
 
         # 1. Creating and starting a new thread with an event loop inside to host the sink.
 

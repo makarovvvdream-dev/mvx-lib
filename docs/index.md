@@ -1,9 +1,12 @@
+# mvx-lib
 
 ```{toctree}
 :maxdepth: 1
 :caption: COMMON
 :titlesonly:
 
+common/version_history/index
+common/installation
 common/errors/index
 common/helpers/index
 common/logger/overview
@@ -29,3 +32,7 @@ common/logger/overview
 :caption: LDAP
 
 ```
+
+## Project repository
+
+Source code is available on [GitHub](https://github.com/makarovvvdream-dev/mvx-lib).

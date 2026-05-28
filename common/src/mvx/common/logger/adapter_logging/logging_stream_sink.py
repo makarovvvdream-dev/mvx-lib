@@ -1,11 +1,9 @@
 # src/mvx/common/logger/adapter_logging/logging_stream_sink.py
 """
-Synchronous stream sink backed by Python's standard logging package.
+Stream sink backed by Python's standard logging package.
 
-The sink adapts MVX ``LogEvent`` objects to ``logging.LogRecord`` objects and
-delivers them to either ``stdout`` or ``stderr`` through ``LoggingStreamConfig``.
-It is intended as the default lightweight sink for console and bootstrap
-logging.
+The sink adapts `LogEvent` objects to standard-library `logging.LogRecord`
+objects and delivers them to stdout or stderr through `LoggingStreamConfig`.
 """
 
 from __future__ import annotations
@@ -31,17 +29,11 @@ DEFAULT_STREAM_LOGGER_NAME = "mvx.stream_log_sink"
 
 class StreamLogSink:
     """
-    Synchronous logger-backed sink for standard streams.
+    Ready-to-use synchronous sink for standard streams.
 
-    Args:
-        logger_name: Name assigned to the internal standard ``logging.Logger``.
-        config: Optional stream logging configuration. If omitted, a default
-            ``LoggingStreamConfig`` targeting ``stderr`` is used.
-
-    Raises:
-        TypeError: If ``logger_name`` is not a string or ``config`` is not a
-            ``LoggingStreamConfig`` instance.
-        ValueError: If ``logger_name`` is ``None`` or empty.
+    `StreamLogSink` owns an internal `logging.Logger` configured by
+    `LoggingStreamConfig`. It delivers prepared `LogEvent` objects to the
+    configured standard stream.
     """
 
     def __init__(
@@ -50,6 +42,15 @@ class StreamLogSink:
         logger_name: str = DEFAULT_STREAM_LOGGER_NAME,
         config: LoggingStreamConfig | None = None,
     ) -> None:
+        """
+        Create a stream sink.
+
+        :param logger_name: name assigned to the internal standard-library logger.
+        :param config: optional stream logging configuration. If omitted, a default
+            `LoggingStreamConfig` is used.
+        :raises TypeError: if an argument has an invalid type.
+        :raises ValueError: if `logger_name` is None or empty.
+        """
         if logger_name is None:
             raise ValueError("logger_name is mandatory, must not be None")
 
@@ -74,15 +75,15 @@ class StreamLogSink:
     @classmethod
     def build_descriptor(cls, **kwargs: Any) -> LogSinkDescriptor:
         """
-        Build the registry descriptor for this stream sink class.
+        Build a descriptor for a stream sink configuration.
 
-        Args:
-            **kwargs: Sink construction arguments. Recognized keys are
-                ``logger_name`` and ``config``.
+        The descriptor is used by the package-level sink registry to detect idempotent
+        configuration requests and conflicts.
 
-        Returns:
-            Descriptor used by ``LogSinkRegistry`` to identify compatible stream
-            sink registrations.
+        :param kwargs: stream sink construction arguments.
+        :return: stream sink descriptor.
+        :raises TypeError: if an argument has an invalid type.
+        :raises ValueError: if `logger_name` is None or empty.
         """
         logger_name = kwargs.get("logger_name", DEFAULT_STREAM_LOGGER_NAME)
 
@@ -127,11 +128,8 @@ class StreamLogSink:
         """
         Create a stream sink and its terminator.
 
-        Args:
-            **kwargs: Arguments passed to ``StreamLogSink``.
-
-        Returns:
-            A pair containing the created sink and an idempotent terminator.
+        :param kwargs: arguments passed to `StreamLogSink`.
+        :return: pair containing the created sink and an idempotent terminator.
         """
         sink = cls(**kwargs)
 
@@ -153,13 +151,12 @@ class StreamLogSink:
 
     def log(self, event: LogEvent) -> None:
         """
-        Deliver a log event to the configured stream.
+        Deliver a prepared log event to the configured stream.
 
-        Args:
-            event: MVX log event to deliver.
+        Calls made after `close()` are ignored.
 
-        Notes:
-            Calls made after ``close()`` are ignored.
+        :param event: prepared event to deliver.
+        :return: None.
         """
         with self._lock:
             if self._closed:
@@ -175,6 +172,8 @@ class StreamLogSink:
         The method removes the installed handler from the internal logger. Standard
         output and error streams are detached but not closed. Repeated calls are
         ignored.
+
+        :return: None.
         """
         with self._lock:
             if self._closed:

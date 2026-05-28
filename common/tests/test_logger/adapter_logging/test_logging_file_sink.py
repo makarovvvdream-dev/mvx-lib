@@ -30,7 +30,7 @@ def make_event(
     level: int = logging.INFO,
     event_namespace: str | None = "mvx.test",
     event_name: str = "event.done",
-    event_type: str | None = "operation",
+    event_outcome: str | None = "operation",
     timestamp: float = 1_700_000_000.123,
     entity_id: str | None = "entity-1",
     payload: Mapping[str, Any] | None = None,
@@ -48,7 +48,7 @@ def make_event(
             source_line=source_line,
             source_func=source_func,
         ),
-        event_type=event_type,
+        event_outcome=event_outcome,
         timestamp=timestamp,
         payload=payload if payload is not None else {"result": "ok"},
     )
@@ -373,7 +373,7 @@ def test_c04_log_event_can_format_payload_and_custom_fields(tmp_path: pathlib.Pa
     file_path = tmp_path / "app.log"
     config = make_config(
         file_path,
-        log_format="%(event_name)s:%(event_type)s:%(entity_id)s:%(payload)s",
+        log_format="%(event_name)s:%(event_outcome)s:%(entity_id)s:%(payload)s",
     )
 
     sink, terminator = create_file_sink(file_path, config=config)
@@ -485,7 +485,7 @@ def test_c09_log_event_with_missing_optional_fields_is_written(tmp_path: pathlib
             make_event(
                 event_namespace=None,
                 entity_id=None,
-                event_type=None,
+                event_outcome=None,
                 source_path=None,
                 source_line=None,
                 source_func=None,

@@ -156,19 +156,19 @@ class SuppressedError(RuntimeError):
 def make_asserting_formatter(
     *,
     expected_ctx: LogContextProto,
-    expected_event_type: _InvocationEventType,
+    expected_event_outcome: _InvocationEventType,
     expected_event: str,
     expected_fields: dict[str, Any],
     result: dict[str, Any],
 ) -> PayloadFormatter:
     def formatter(
         ctx_arg: LogContextProto,
-        event_type: _InvocationEventType,
+        event_outcome: _InvocationEventType,
         event: str,
         fields: dict[str, Any],
     ) -> dict[str, Any]:
         assert ctx_arg is expected_ctx
-        assert event_type == expected_event_type
+        assert event_outcome == expected_event_outcome
         assert event == expected_event
         assert fields == expected_fields
         return result
@@ -179,12 +179,12 @@ def make_asserting_formatter(
 def make_returning_formatter(result: dict[str, Any]) -> PayloadFormatter:
     def formatter(
         ctx_arg: LogContextProto,
-        event_type: _InvocationEventType,
+        event_outcome: _InvocationEventType,
         event: str,
         fields: dict[str, Any],
     ) -> dict[str, Any]:
         _ = ctx_arg
-        _ = event_type
+        _ = event_outcome
         _ = event
         _ = fields
 
@@ -196,12 +196,12 @@ def make_returning_formatter(result: dict[str, Any]) -> PayloadFormatter:
 def make_raising_formatter() -> PayloadFormatter:
     def formatter(
         ctx_arg: LogContextProto,
-        event_type: _InvocationEventType,
+        event_outcome: _InvocationEventType,
         event: str,
         fields: dict[str, Any],
     ) -> dict[str, Any]:
         _ = ctx_arg
-        _ = event_type
+        _ = event_outcome
         _ = event
         _ = fields
         raise RuntimeError("formatter failed")
@@ -444,7 +444,7 @@ def test_e01_inject_context_payload_uses_normalized_resolved_fields() -> None:
     result = _inject_context_payload(
         ctx=ctx,
         event="op.test",
-        event_type=_InvocationEventType.INVOKE,
+        event_outcome=_InvocationEventType.INVOKE,
         field_specs=("name", "items!"),
         source_kwargs={"name": "alpha", "items": [1, 2, 3]},
         payload_formatter=None,
@@ -465,7 +465,7 @@ def test_e02_inject_context_payload_uses_formatter_output() -> None:
 
     formatter = make_asserting_formatter(
         expected_ctx=ctx,
-        expected_event_type=_InvocationEventType.SUCCESS,
+        expected_event_outcome=_InvocationEventType.SUCCESS,
         expected_event="op.test",
         expected_fields={"name": "alpha"},
         result={"formatted": "yes"},
@@ -474,7 +474,7 @@ def test_e02_inject_context_payload_uses_formatter_output() -> None:
     result = _inject_context_payload(
         ctx=ctx,
         event="op.test",
-        event_type=_InvocationEventType.SUCCESS,
+        event_outcome=_InvocationEventType.SUCCESS,
         field_specs=("name",),
         source_kwargs={"name": "alpha"},
         payload_formatter=formatter,
@@ -491,7 +491,7 @@ def test_e03_inject_context_payload_calls_formatter_even_without_fields() -> Non
 
     formatter = make_asserting_formatter(
         expected_ctx=ctx,
-        expected_event_type=_InvocationEventType.INVOKE,
+        expected_event_outcome=_InvocationEventType.INVOKE,
         expected_event="op.test",
         expected_fields={},
         result={"formatted": True},
@@ -500,7 +500,7 @@ def test_e03_inject_context_payload_calls_formatter_even_without_fields() -> Non
     _inject_context_payload(
         ctx=ctx,
         event="op.test",
-        event_type=_InvocationEventType.INVOKE,
+        event_outcome=_InvocationEventType.INVOKE,
         field_specs=(),
         source_kwargs={},
         payload_formatter=formatter,
@@ -517,7 +517,7 @@ def test_e04_inject_context_payload_falls_back_when_formatter_raises() -> None:
     _inject_context_payload(
         ctx=ctx,
         event="op.test",
-        event_type=_InvocationEventType.INVOKE,
+        event_outcome=_InvocationEventType.INVOKE,
         field_specs=("name",),
         source_kwargs={"name": "alpha"},
         payload_formatter=make_raising_formatter(),
@@ -536,7 +536,7 @@ def test_e05_inject_context_payload_places_system_keys_under_context() -> None:
     _inject_context_payload(
         ctx=ctx,
         event="op.test",
-        event_type=_InvocationEventType.FAILED,
+        event_outcome=_InvocationEventType.FAILED,
         field_specs=(),
         source_kwargs={},
         payload_formatter=make_returning_formatter(
@@ -566,7 +566,7 @@ def test_e06_inject_context_payload_merges_system_keys_into_existing_context() -
     _inject_context_payload(
         ctx=ctx,
         event="op.test",
-        event_type=_InvocationEventType.INVOKE,
+        event_outcome=_InvocationEventType.INVOKE,
         field_specs=(),
         source_kwargs={},
         payload_formatter=make_returning_formatter({"kwargs": {"x": 1}}),
@@ -588,7 +588,7 @@ def test_e07_inject_context_payload_does_nothing_without_fields_or_formatter() -
     result = _inject_context_payload(
         ctx=ctx,
         event="op.test",
-        event_type=_InvocationEventType.INVOKE,
+        event_outcome=_InvocationEventType.INVOKE,
         field_specs=(),
         source_kwargs={},
         payload_formatter=None,
@@ -605,12 +605,12 @@ def test_e08_inject_context_payload_falls_back_when_formatter_returns_non_dict()
 
     def formatter(
         ctx_arg: LogContextProto,
-        event_type: _InvocationEventType,
+        event_outcome: _InvocationEventType,
         event: str,
         fields: dict[str, Any],
     ) -> Any:
         _ = ctx_arg
-        _ = event_type
+        _ = event_outcome
         _ = event
         _ = fields
         return "not-a-dict"
@@ -618,7 +618,7 @@ def test_e08_inject_context_payload_falls_back_when_formatter_returns_non_dict()
     _inject_context_payload(
         ctx=ctx,
         event="op.test",
-        event_type=_InvocationEventType.INVOKE,
+        event_outcome=_InvocationEventType.INVOKE,
         field_specs=("name",),
         source_kwargs={"name": "alpha"},
         payload_formatter=formatter,
@@ -868,7 +868,7 @@ def test_i01_log_invocation_sync_success_emits_invoke_and_success() -> None:
     invoke = ctx.events[0]
     assert invoke.meta.event_name == "op.sync"
     assert invoke.level == LogLevel.INFO
-    assert invoke.event_type == _InvocationEventType.INVOKE.value
+    assert invoke.event_outcome == _InvocationEventType.INVOKE.value
     assert invoke.payload == {
         "name": "alpha",
         "kwargs": {"count": 3},
@@ -876,7 +876,7 @@ def test_i01_log_invocation_sync_success_emits_invoke_and_success() -> None:
 
     success = ctx.events[1]
     assert success.level == LogLevel.WARNING
-    assert success.event_type == _InvocationEventType.SUCCESS.value
+    assert success.event_outcome == _InvocationEventType.SUCCESS.value
     assert success.payload == {
         "name": "alpha",
         "result": {"value": "done"},
@@ -976,7 +976,7 @@ def test_i06_log_invocation_sync_success_without_result_logging_has_empty_succes
 
     assert target() == "ok"
 
-    assert ctx.events[1].event_type == _InvocationEventType.SUCCESS.value
+    assert ctx.events[1].event_outcome == _InvocationEventType.SUCCESS.value
     assert ctx.events[1].payload == {}
 
 
@@ -1034,7 +1034,7 @@ def test_i09_log_invocation_sync_event_disabled_still_logs_failure() -> None:
 
     assert len(ctx.events) == 1
     assert ctx.events[0].meta.event_name == "op.disabled.fail"
-    assert ctx.events[0].event_type == _InvocationEventType.FAILED.value
+    assert ctx.events[0].event_outcome == _InvocationEventType.FAILED.value
     assert ctx.events[0].level == LogLevel.ERROR
     assert ctx.events[0].payload == {
         "error": {
@@ -1056,8 +1056,8 @@ def test_i10_log_invocation_sync_failure_logs_error_and_reraises() -> None:
         target()
 
     assert len(ctx.events) == 2
-    assert ctx.events[0].event_type == _InvocationEventType.INVOKE.value
-    assert ctx.events[1].event_type == _InvocationEventType.FAILED.value
+    assert ctx.events[0].event_outcome == _InvocationEventType.INVOKE.value
+    assert ctx.events[1].event_outcome == _InvocationEventType.FAILED.value
     assert ctx.events[1].level == LogLevel.ERROR
     assert ctx.events[1].payload == {
         "error": {
@@ -1082,7 +1082,7 @@ def test_i11_log_invocation_sync_failure_suppresses_already_logged_error_payload
     with pytest.raises(CustomError, match="boom"):
         target()
 
-    assert ctx.events[1].event_type == _InvocationEventType.FAILED.value
+    assert ctx.events[1].event_outcome == _InvocationEventType.FAILED.value
     assert ctx.events[1].level == LogLevel.DEBUG
     assert ctx.events[1].payload == {}
     assert ctx.error_payload_calls == []
@@ -1168,7 +1168,7 @@ def test_i15_log_invocation_sync_cancelled_logs_cancelled_and_reraises() -> None
         target()
 
     assert len(ctx.events) == 2
-    assert ctx.events[1].event_type == _InvocationEventType.CANCELLED.value
+    assert ctx.events[1].event_outcome == _InvocationEventType.CANCELLED.value
     assert ctx.events[1].level == LogLevel.INFO
     assert ctx.events[1].payload == {
         "cancelled": True,
@@ -1192,7 +1192,7 @@ def test_i16_log_invocation_sync_cancelled_skips_when_error_already_logged() -> 
         target()
 
     assert len(ctx.events) == 1
-    assert ctx.events[0].event_type == _InvocationEventType.INVOKE.value
+    assert ctx.events[0].event_outcome == _InvocationEventType.INVOKE.value
 
 
 def test_i17_log_invocation_sync_event_disabled_still_logs_cancelled() -> None:
@@ -1208,7 +1208,7 @@ def test_i17_log_invocation_sync_event_disabled_still_logs_cancelled() -> None:
 
     assert len(ctx.events) == 1
     assert ctx.events[0].meta.event_name == "op.disabled.cancel"
-    assert ctx.events[0].event_type == _InvocationEventType.CANCELLED.value
+    assert ctx.events[0].event_outcome == _InvocationEventType.CANCELLED.value
     assert ctx.events[0].level == LogLevel.INFO
     assert ctx.events[0].payload == {
         "cancelled": True,
@@ -1235,7 +1235,7 @@ def test_i18_log_invocation_sync_failure_policy_uses_first_matching_rule() -> No
     with pytest.raises(CustomError, match="boom"):
         target()
 
-    assert ctx.events[1].event_type == _InvocationEventType.FAILED.value
+    assert ctx.events[1].event_outcome == _InvocationEventType.FAILED.value
     assert ctx.events[1].level == LogLevel.INFO
     assert ctx.events[1].payload == {}
     assert len(ctx.marked_errors) == 1
@@ -1256,7 +1256,7 @@ def test_i19_log_invocation_sync_failure_policy_force_log_ignores_already_logged
     with pytest.raises(CustomError, match="boom"):
         target()
 
-    assert ctx.events[1].event_type == _InvocationEventType.FAILED.value
+    assert ctx.events[1].event_outcome == _InvocationEventType.FAILED.value
     assert ctx.events[1].level == LogLevel.ERROR
     assert ctx.events[1].payload == {
         "error": {
@@ -1309,13 +1309,13 @@ async def test_j01_log_invocation_sync_returning_awaitable_success_logs_after_aw
     result = target()
 
     assert len(ctx.events) == 1
-    assert ctx.events[0].event_type == _InvocationEventType.INVOKE.value
+    assert ctx.events[0].event_outcome == _InvocationEventType.INVOKE.value
 
     awaited = await result
 
     assert awaited == "done"
     assert len(ctx.events) == 2
-    assert ctx.events[1].event_type == _InvocationEventType.SUCCESS.value
+    assert ctx.events[1].event_outcome == _InvocationEventType.SUCCESS.value
     assert ctx.events[1].payload == {"result": "done"}
 
 
@@ -1336,7 +1336,7 @@ async def test_j02_log_invocation_sync_returning_awaitable_failure_logs_after_aw
         await result
 
     assert len(ctx.events) == 2
-    assert ctx.events[1].event_type == _InvocationEventType.FAILED.value
+    assert ctx.events[1].event_outcome == _InvocationEventType.FAILED.value
     assert ctx.events[1].payload == {
         "error": {
             "kind": "CustomError",
@@ -1362,7 +1362,7 @@ async def test_j03_log_invocation_sync_returning_awaitable_cancelled_logs_after_
         await result
 
     assert len(ctx.events) == 2
-    assert ctx.events[1].event_type == _InvocationEventType.CANCELLED.value
+    assert ctx.events[1].event_outcome == _InvocationEventType.CANCELLED.value
     assert ctx.events[1].payload["cancelled"] is True
 
 
@@ -1387,7 +1387,7 @@ async def test_j04_log_invocation_sync_returning_awaitable_event_disabled_still_
         await result
 
     assert len(ctx.events) == 1
-    assert ctx.events[0].event_type == _InvocationEventType.FAILED.value
+    assert ctx.events[0].event_outcome == _InvocationEventType.FAILED.value
     assert ctx.events[0].payload == {
         "error": {
             "kind": "CustomError",
@@ -1417,7 +1417,7 @@ async def test_j05_log_invocation_sync_returning_awaitable_event_disabled_still_
         await result
 
     assert len(ctx.events) == 1
-    assert ctx.events[0].event_type == _InvocationEventType.CANCELLED.value
+    assert ctx.events[0].event_outcome == _InvocationEventType.CANCELLED.value
     assert ctx.events[0].payload == {
         "cancelled": True,
         "error": {
@@ -1450,12 +1450,12 @@ async def test_k01_log_invocation_async_success_emits_invoke_and_success() -> No
 
     assert result == Inner(value="done", items=[1, 2])
     assert len(ctx.events) == 2
-    assert ctx.events[0].event_type == _InvocationEventType.INVOKE.value
+    assert ctx.events[0].event_outcome == _InvocationEventType.INVOKE.value
     assert ctx.events[0].payload == {
         "name": "alpha",
         "kwargs": {"count": 3},
     }
-    assert ctx.events[1].event_type == _InvocationEventType.SUCCESS.value
+    assert ctx.events[1].event_outcome == _InvocationEventType.SUCCESS.value
     assert ctx.events[1].payload == {
         "name": "alpha",
         "result": {"value": "done"},
@@ -1504,7 +1504,7 @@ async def test_k04_log_invocation_async_event_disabled_still_logs_failure() -> N
 
     assert len(ctx.events) == 1
     assert ctx.events[0].meta.event_name == "op.disabled.async.fail"
-    assert ctx.events[0].event_type == _InvocationEventType.FAILED.value
+    assert ctx.events[0].event_outcome == _InvocationEventType.FAILED.value
     assert ctx.events[0].level == LogLevel.ERROR
     assert ctx.events[0].payload == {
         "error": {
@@ -1526,7 +1526,7 @@ async def test_k05_log_invocation_async_failure_logs_error_and_reraises() -> Non
         await target()
 
     assert len(ctx.events) == 2
-    assert ctx.events[1].event_type == _InvocationEventType.FAILED.value
+    assert ctx.events[1].event_outcome == _InvocationEventType.FAILED.value
     assert ctx.events[1].payload == {
         "error": {
             "kind": "CustomError",
@@ -1551,7 +1551,7 @@ async def test_k06_log_invocation_async_failure_policy_suppresses_error_payload(
     with pytest.raises(SuppressedError):
         await target()
 
-    assert ctx.events[1].event_type == _InvocationEventType.FAILED.value
+    assert ctx.events[1].event_outcome == _InvocationEventType.FAILED.value
     assert ctx.events[1].level == LogLevel.INFO
     assert ctx.events[1].payload == {}
 
@@ -1568,7 +1568,7 @@ async def test_k07_log_invocation_async_cancelled_logs_cancelled_and_reraises() 
         await target()
 
     assert len(ctx.events) == 2
-    assert ctx.events[1].event_type == _InvocationEventType.CANCELLED.value
+    assert ctx.events[1].event_outcome == _InvocationEventType.CANCELLED.value
     assert ctx.events[1].payload == {
         "cancelled": True,
         "error": {
@@ -1591,7 +1591,7 @@ async def test_k08_log_invocation_async_cancelled_skips_when_error_already_logge
         await target()
 
     assert len(ctx.events) == 1
-    assert ctx.events[0].event_type == _InvocationEventType.INVOKE.value
+    assert ctx.events[0].event_outcome == _InvocationEventType.INVOKE.value
 
 
 @pytest.mark.asyncio
@@ -1607,7 +1607,7 @@ async def test_k09_log_invocation_async_event_disabled_still_logs_cancelled() ->
 
     assert len(ctx.events) == 1
     assert ctx.events[0].meta.event_name == "op.disabled.async.cancel"
-    assert ctx.events[0].event_type == _InvocationEventType.CANCELLED.value
+    assert ctx.events[0].event_outcome == _InvocationEventType.CANCELLED.value
     assert ctx.events[0].level == LogLevel.INFO
     assert ctx.events[0].payload == {
         "cancelled": True,

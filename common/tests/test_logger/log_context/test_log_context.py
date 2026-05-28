@@ -502,7 +502,7 @@ def test_d08_event_policy_receives_log_event_meta_before_payload_normalization()
         level=LogLevel.WARNING,
         payload=payload,
         event_namespace="custom.ns",
-        event_type="operation",
+        event_outcome="operation",
         entity_id="entity-1",
         source_path="/tmp/a.py",
         source_line=10,
@@ -526,7 +526,7 @@ def test_d08_event_policy_receives_log_event_meta_before_payload_normalization()
 
     assert logged.level is LogLevel.WARNING
     assert logged.meta is checked
-    assert logged.event_type == "operation"
+    assert logged.event_outcome == "operation"
     assert logged.payload == {"normalized_payload": True}
     assert processor.normalize_payload_calls == [(payload, False)]
 
@@ -571,7 +571,7 @@ def test_e01_log_event_builds_log_event_with_defaults() -> None:
     assert logged.level is LogLevel.INFO
     assert logged.meta.event_namespace == "test.ns"
     assert logged.meta.event_name == "event.x"
-    assert logged.event_type is None
+    assert logged.event_outcome is None
     assert before <= logged.timestamp <= after
     assert logged.meta.entity_id is None
     assert logged.payload == {"normalized_payload": True}
@@ -589,7 +589,7 @@ def test_e02_log_event_uses_explicit_metadata() -> None:
         level=LogLevel.WARNING,
         payload={"x": 1},
         event_namespace="custom.ns",
-        event_type="operation",
+        event_outcome="operation",
         entity_id="entity-1",
         source_path="/tmp/a.py",
         source_line=10,
@@ -601,7 +601,7 @@ def test_e02_log_event_uses_explicit_metadata() -> None:
     assert logged.level is LogLevel.WARNING
     assert logged.meta.event_namespace == "custom.ns"
     assert logged.meta.event_name == "event.x"
-    assert logged.event_type == "operation"
+    assert logged.event_outcome == "operation"
     assert logged.meta.entity_id == "entity-1"
     assert logged.payload == {"normalized_payload": True}
     assert logged.meta.source_path == "/tmp/a.py"
@@ -708,7 +708,7 @@ def test_e08_emit_log_event_bypasses_event_policy() -> None:
     event = LogEvent(
         level=LogLevel.INFO,
         meta=meta,
-        event_type="manual",
+        event_outcome="manual",
         timestamp=time.time(),
         payload={"x": 1},
     )
@@ -727,7 +727,7 @@ def test_e09_emit_log_event_does_not_normalize_payload() -> None:
     event = LogEvent(
         level=LogLevel.INFO,
         meta=make_log_event_meta(event_name="event.x"),
-        event_type="manual",
+        event_outcome="manual",
         timestamp=time.time(),
         payload=payload,
     )
@@ -752,7 +752,7 @@ def assert_single_logged_event(
     assert logged.level is expected_level
     assert logged.meta.event_namespace == "ns"
     assert logged.meta.event_name == "event.x"
-    assert logged.event_type == "type"
+    assert logged.event_outcome == "type"
     assert logged.meta.entity_id == "id"
     assert logged.meta.source_path == "path"
     assert logged.meta.source_line == 123
@@ -768,7 +768,7 @@ def test_f01_log_debug_event_uses_debug_level() -> None:
         event="event.x",
         payload={"x": 1},
         event_namespace="ns",
-        event_type="type",
+        event_outcome="type",
         entity_id="id",
         source_path="path",
         source_line=123,
@@ -786,7 +786,7 @@ def test_f02_log_info_event_uses_info_level() -> None:
         event="event.x",
         payload={"x": 1},
         event_namespace="ns",
-        event_type="type",
+        event_outcome="type",
         entity_id="id",
         source_path="path",
         source_line=123,
@@ -804,7 +804,7 @@ def test_f03_log_warning_event_uses_warning_level() -> None:
         event="event.x",
         payload={"x": 1},
         event_namespace="ns",
-        event_type="type",
+        event_outcome="type",
         entity_id="id",
         source_path="path",
         source_line=123,
@@ -822,7 +822,7 @@ def test_f04_log_error_event_uses_error_level() -> None:
         event="event.x",
         payload={"x": 1},
         event_namespace="ns",
-        event_type="type",
+        event_outcome="type",
         entity_id="id",
         source_path="path",
         source_line=123,

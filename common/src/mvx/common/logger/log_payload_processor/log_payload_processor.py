@@ -15,6 +15,17 @@ __all__ = ("LogPayloadProcessor",)
 
 
 class LogPayloadProcessor:
+    """
+    Default implementation of payload normalization.
+
+    `LogPayloadProcessor` converts payload mappings and individual values into
+    log-ready structured data.
+
+    The processor supports configurable verbosity, string length limiting,
+    collection item limiting, explicit `LogPayloadProvider` objects, and optional
+    type-based log adapters.
+    """
+
     __slots__ = (
         "_lock",
         "_verbosity_level",
@@ -31,7 +42,19 @@ class LogPayloadProcessor:
         max_items: int | None = None,
         log_adapter_resolver: LogAdapterResolver | None = None,
     ) -> None:
+        """
+        Create the default payload processor.
 
+        :param verbosity_level: optional verbosity level. If omitted, `NORMAL` is used.
+        :param max_str_len: optional maximum string length. If omitted,
+            `DEFAULT_MAX_STR_LEN` is used.
+        :param max_items: optional maximum number of mapping or sequence items. If
+            omitted, `DEFAULT_MAX_ITEMS` is used.
+        :param log_adapter_resolver: optional callable used to resolve type-based log
+            adapters.
+        :raises TypeError: if an argument has an invalid type.
+        :raises ValueError: if `max_str_len` or `max_items` is less than 1.
+        """
         if verbosity_level is not None:
             if not isinstance(verbosity_level, LogVerbosityLevel):
                 raise TypeError(
@@ -66,6 +89,13 @@ class LogPayloadProcessor:
 
     @property
     def verbosity_level(self) -> LogVerbosityLevel:
+        """
+        Return the effective verbosity level.
+
+        If no local verbosity level was configured, returns `LogVerbosityLevel.NORMAL`.
+
+        :return: effective verbosity level.
+        """
         with self._lock:
             if self._verbosity_level is not None:
                 return self._verbosity_level
@@ -73,6 +103,13 @@ class LogPayloadProcessor:
             return LogVerbosityLevel.NORMAL
 
     def set_verbosity_level(self, verbosity_level: LogVerbosityLevel) -> None:
+        """
+        Set the local verbosity level.
+
+        :param verbosity_level: verbosity level to use.
+        :return: None.
+        :raises TypeError: if `verbosity_level` is not a `LogVerbosityLevel`.
+        """
         if not isinstance(verbosity_level, LogVerbosityLevel):
             raise TypeError("argument 'verbosity_level' must be an instance of 'LogVerbosityLevel'")
 
@@ -80,6 +117,13 @@ class LogPayloadProcessor:
             self._verbosity_level = verbosity_level
 
     def reset_verbosity_level(self) -> None:
+        """
+        Reset the local verbosity level.
+
+        After reset, the processor uses `LogVerbosityLevel.NORMAL`.
+
+        :return: None.
+        """
         with self._lock:
             self._verbosity_level = None
 
@@ -87,6 +131,13 @@ class LogPayloadProcessor:
 
     @property
     def max_str_len(self) -> int:
+        """
+        Return the effective maximum string length.
+
+        If no local value was configured, returns `DEFAULT_MAX_STR_LEN`.
+
+        :return: effective maximum string length.
+        """
         with self._lock:
             if self._max_str_len is not None:
                 return self._max_str_len
@@ -94,6 +145,14 @@ class LogPayloadProcessor:
             return DEFAULT_MAX_STR_LEN
 
     def set_max_str_len(self, max_str_len: int) -> None:
+        """
+        Set the local maximum string length.
+
+        :param max_str_len: maximum string length to use.
+        :return: None.
+        :raises TypeError: if `max_str_len` is not an integer.
+        :raises ValueError: if `max_str_len` is less than 1.
+        """
         if not isinstance(max_str_len, int):
             raise TypeError("argument 'max_str_len' must be integer")
 
@@ -104,6 +163,13 @@ class LogPayloadProcessor:
             self._max_str_len = max_str_len
 
     def reset_max_str_len(self) -> None:
+        """
+        Reset the local maximum string length.
+
+        After reset, the processor uses `DEFAULT_MAX_STR_LEN`.
+
+        :return: None.
+        """
         with self._lock:
             self._max_str_len = None
 
@@ -111,6 +177,13 @@ class LogPayloadProcessor:
 
     @property
     def max_items(self) -> int:
+        """
+        Return the effective maximum number of mapping or sequence items.
+
+        If no local value was configured, returns `DEFAULT_MAX_ITEMS`.
+
+        :return: effective maximum item count.
+        """
         with self._lock:
             if self._max_items is not None:
                 return self._max_items
@@ -118,6 +191,14 @@ class LogPayloadProcessor:
             return DEFAULT_MAX_ITEMS
 
     def set_max_items(self, max_items: int) -> None:
+        """
+        Set the local maximum number of mapping or sequence items.
+
+        :param max_items: maximum item count to use.
+        :return: None.
+        :raises TypeError: if `max_items` is not an integer.
+        :raises ValueError: if `max_items` is less than 1.
+        """
         if not isinstance(max_items, int):
             raise TypeError("argument 'max_items' must be integer")
 
@@ -128,6 +209,13 @@ class LogPayloadProcessor:
             self._max_items = max_items
 
     def reset_max_items(self) -> None:
+        """
+        Reset the local maximum number of mapping or sequence items.
+
+        After reset, the processor uses `DEFAULT_MAX_ITEMS`.
+
+        :return: None.
+        """
         with self._lock:
             self._max_items = None
 
@@ -135,6 +223,11 @@ class LogPayloadProcessor:
 
     @property
     def log_adapter_resolver(self) -> LogAdapterResolver | None:
+        """
+        Return the configured log adapter resolver.
+
+        :return: log adapter resolver, or None if no resolver is configured.
+        """
         with self._lock:
             if self._log_adapter_resolver is not None:
                 return self._log_adapter_resolver
@@ -142,6 +235,14 @@ class LogPayloadProcessor:
             return None
 
     def set_log_adapter_resolver(self, log_adapter_resolver: LogAdapterResolver) -> None:
+        """
+        Set the log adapter resolver.
+
+        :param log_adapter_resolver: callable used to resolve log adapters for custom
+            values.
+        :return: None.
+        :raises TypeError: if `log_adapter_resolver` is not callable.
+        """
         if not callable(log_adapter_resolver):
             raise TypeError("argument 'log_adapter_resolver' must be a callable")
 
@@ -149,6 +250,13 @@ class LogPayloadProcessor:
             self._log_adapter_resolver = log_adapter_resolver
 
     def reset_log_adapter_resolver(self) -> None:
+        """
+        Reset the log adapter resolver.
+
+        After reset, no type-based log adapter resolver is used.
+
+        :return: None.
+        """
         with self._lock:
             self._log_adapter_resolver = None
 
@@ -160,7 +268,18 @@ class LogPayloadProcessor:
         *,
         unbounded: bool = False,
     ) -> dict[str, Any]:
+        """
+        Normalize a structured payload mapping.
 
+        Mapping keys are converted to strings. Mapping values are normalized as
+        individual log values. Item-count limiting is applied unless `unbounded` is
+        True.
+
+        :param payload: payload mapping to normalize.
+        :param unbounded: whether item-count limiting should be disabled for this
+            payload.
+        :return: normalized payload dictionary.
+        """
         effective_max_items = self.max_items if not unbounded else None
         effective_max_str_len = self.max_str_len
 
@@ -174,7 +293,19 @@ class LogPayloadProcessor:
         *,
         unbounded: bool = False,
     ) -> str | int | float | bool | bytes | dict[str, Any] | list[Any] | None:
+        """
+        Normalize a single value for inclusion in a log payload.
 
+        The processor handles primitives, bytes-like values, enums, mappings,
+        sequences, objects implementing `LogPayloadProvider`, and values supported by
+        the configured log adapter resolver. Unsupported objects are represented by
+        their type name.
+
+        :param value: value to normalize.
+        :param unbounded: whether item-count limiting should be disabled for this
+            value.
+        :return: normalized log-ready value.
+        """
         effective_max_items = self.max_items if not unbounded else None
         effective_max_str_len = self.max_str_len
 
@@ -183,6 +314,14 @@ class LogPayloadProcessor:
         )
 
     def get_plain_verbosity_level(self) -> str | None:
+        """
+        Return the effective verbosity level as a plain string.
+
+        This method is used by components that need string-based verbosity checks,
+        such as verbosity-gated field specs in `log_invocation`.
+
+        :return: effective verbosity level name.
+        """
         return self.verbosity_level.value.upper()
 
     # ---- Internal functions --------------------------------------------------------------

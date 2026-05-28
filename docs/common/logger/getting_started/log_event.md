@@ -91,7 +91,7 @@ class LogEventMeta:
 class LogEvent:
     level: int
     meta: LogEventMeta
-    event_type: str | None
+    event_outcome: str | None
     timestamp: float
     payload: Mapping[str, Any]
 ```
@@ -120,7 +120,7 @@ Event data describes the completed log event after it has been accepted.
 It includes:
 
 * `level` — the logging level, usually one of the `LogLevel` values;
-* `event_type` — an optional category of the event;
+* `event_outcome` — an optional outcome of the event (success, failure, etc.);
 * `timestamp` — the event creation time;
 * `payload` — the normalized event data.
 

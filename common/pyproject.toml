@@ -1,6 +1,6 @@
 [project]
 name = "mvx-common"
-version = "0.1.0"
+version = "0.2.0"
 description = "Common utilities for MVX Python packages."
 readme = "README.md"
 requires-python = ">=3.13"
@@ -18,10 +18,11 @@ dev = [
     "mypy",
 ]
 docs = [
-    "sphinx",
+    "Sphinx<9",
     "sphinx-rtd-theme",
     "myst-parser",
     "sphinx-autodoc-typehints",
+    "enum-tools[sphinx]",
 ]
 
 [build-system]

@@ -213,6 +213,10 @@ The sink receives the final `LogEvent` and delivers it.
 :caption: What to read next
 :maxdepth: 1
 
-
+from_the_author
 getting_started/index
+architecture/overview
+log_components/index
+advanced_usage/index
+api/index
 ```

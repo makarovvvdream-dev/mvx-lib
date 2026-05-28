@@ -1,11 +1,13 @@
 # src/mvx/common/logger/adapter_logging/logging_file_sink.py
 """
-Asynchronous file sink backed by Python's standard logging package.
+File sink backed by Python's standard logging package.
 
-The sink adapts MVX ``LogEvent`` objects to ``logging.LogRecord`` objects and
-writes them to a configured file handler. It uses ``AsyncioLogSink`` as the
-buffered asynchronous runtime, so public ``log()`` calls remain thread-safe and
-non-blocking with respect to actual file delivery.
+The sink adapts `LogEvent` objects to standard-library `logging.LogRecord`
+objects and writes them to a configured file handler.
+
+`FileLogSink` uses `AsyncioLogSink` as its asynchronous delivery runtime, so
+public `log()` calls enqueue events while file delivery is handled by the sink
+runtime.
 """
 
 from __future__ import annotations
@@ -34,18 +36,11 @@ DEFAULT_FILE_LOGGER_NAME = "mvx.file_log_sink"
 
 class FileLogSink(AsyncioLogSink):
     """
-    Asynchronous logger-backed sink for file output.
+    Ready-to-use asynchronous sink for file output.
 
-    Args:
-        logger_name: Name assigned to the internal standard ``logging.Logger``.
-        config: File logging configuration used to create the file handler.
-        **kwargs: Additional keyword arguments passed to ``AsyncioLogSink``.
-
-    Raises:
-        TypeError: If ``logger_name`` is not a string or ``config`` is not a
-            ``LoggingFileConfig`` instance.
-        ValueError: If ``logger_name`` or ``config`` is ``None``, or if
-            ``logger_name`` is empty.
+    `FileLogSink` owns an internal `logging.Logger` configured by
+    `LoggingFileConfig`. It delivers prepared `LogEvent` objects to the configured
+    file through the `AsyncioLogSink` runtime.
     """
 
     def __init__(
@@ -55,7 +50,16 @@ class FileLogSink(AsyncioLogSink):
         config: LoggingFileConfig,
         **kwargs: Any,
     ) -> None:
+        """
+        Create a file sink.
 
+        :param logger_name: name assigned to the internal standard-library logger.
+        :param config: file logging configuration used to create the file handler.
+        :param kwargs: additional keyword arguments passed to `AsyncioLogSink`.
+        :raises TypeError: if an argument has an invalid type.
+        :raises ValueError: if `logger_name` or `config` is None, or if `logger_name`
+            is empty.
+        """
         if logger_name is None:
             raise ValueError("logger_name is mandatory, must not be None")
 
@@ -85,15 +89,16 @@ class FileLogSink(AsyncioLogSink):
     @classmethod
     def build_descriptor(cls, **kwargs: Any) -> LogSinkDescriptor:
         """
-        Build the registry descriptor for this file sink class.
+        Build a descriptor for a file sink configuration.
 
-        Args:
-            **kwargs: Sink construction arguments. Recognized keys are
-                ``logger_name`` and ``config``.
+        The descriptor is used by the package-level sink registry to detect idempotent
+        configuration requests and conflicts. The file path is expanded and resolved
+        before it is stored in the descriptor resource key.
 
-        Returns:
-            Descriptor used by ``LogSinkRegistry`` to identify compatible file
-            sink registrations.
+        :param kwargs: file sink construction arguments.
+        :return: file sink descriptor.
+        :raises TypeError: if an argument has an invalid type.
+        :raises ValueError: if `logger_name` is None or empty.
         """
         logger_name = kwargs.get("logger_name", DEFAULT_FILE_LOGGER_NAME)
 
@@ -142,15 +147,12 @@ class FileLogSink(AsyncioLogSink):
         """
         Create a file sink and its terminator.
 
-        Args:
-            **kwargs: Arguments passed to ``FileLogSink``.
+        The terminator stops the asynchronous sink runtime and closes the file handler.
+        The file handler is closed even if the sink was created but never started.
 
-        Returns:
-            A pair containing the created sink and an idempotent terminator.
-
-        Notes:
-            The returned terminator always closes the file handler, even if the
-            sink was created but never started.
+        :param kwargs: arguments passed to `FileLogSink`.
+        :return: pair containing the created sink and an idempotent terminator.
+        :raises TypeError: if the created sink is not a `FileLogSink` instance.
         """
         sink, base_terminator = super().create(**kwargs)
 
@@ -169,10 +171,10 @@ class FileLogSink(AsyncioLogSink):
 
     async def _dispatch_core(self, event: LogEvent) -> None:
         """
-        Deliver one log event to the configured file handler.
+        Deliver one prepared event to the configured file handler.
 
-        Args:
-            event: MVX log event to write.
+        :param event: prepared event to write.
+        :return: None.
         """
         record = make_log_record_from_event(self._logger_name, event)
         self._logger.handle(record)
@@ -180,6 +182,8 @@ class FileLogSink(AsyncioLogSink):
     async def _on_stopped(self) -> None:
         """
         Close file resources during graceful sink shutdown.
+
+        :return: None.
         """
         self._close_handler()
 
@@ -187,8 +191,9 @@ class FileLogSink(AsyncioLogSink):
         """
         Close the installed file handler once.
 
-        The method is idempotent and is shared by graceful stop and by the
-        terminator path used when the sink was never started.
+        The method is shared by graceful stop and the terminator path.
+
+        :return: None.
         """
         with self._handler_lock:
             if self._handler_closed:

@@ -24,6 +24,10 @@ __all__ = (
 
 
 class LoggerError(ReasonedError):
+    """
+    Base class for logger-specific errors.
+    """
+
     pass
 
 
@@ -31,6 +35,10 @@ class LoggerError(ReasonedError):
 
 
 class LogContextError(LoggerError):
+    """
+    Base class for `LogContext` errors.
+    """
+
     pass
 
 
@@ -40,7 +48,19 @@ class _LogContextErrorReason(StrEnum):
 
 
 class LogContextResetError(LogContextError):
-    def __init__(self, target: str):
+    """
+    Raised when a root log context component cannot be reset.
+
+    Root contexts have no parent fallback, so mandatory infrastructure such as
+    sink, payload processor, and logging error handling policy cannot be reset.
+    """
+
+    def __init__(self, target: str) -> None:
+        """
+        Create a root-context reset error.
+
+        :param target: component name that cannot be reset.
+        """
         msg = f"resetting '{target}' is not allowed for the root log context"
         details = {
             "target": target,
@@ -54,7 +74,19 @@ class LogContextResetError(LogContextError):
 
 
 class LogContextUnableToLog(LogContextError):
-    def __init__(self, cause: Exception):
+    """
+    Raised when a log context cannot deliver a prepared event.
+
+    This error is raised when sink delivery fails and the effective
+    `LogErrorHandlingPolicy` is `RAISE`.
+    """
+
+    def __init__(self, cause: Exception) -> None:
+        """
+        Create an unable-to-log error.
+
+        :param cause: original sink delivery exception.
+        """
         msg = f"unable to log event -> {str(cause)}"
 
         super().__init__(
@@ -97,25 +129,51 @@ class _LogSinkConfigurationErrorReason(StrEnum):
 
 
 class LogSinkConfigurationError(LoggerError):
+    """
+    Base class for package-level sink configuration errors.
+    """
+
     def __init__(
         self,
         message: str,
         reason: str,
         details: dict[str, Any] | None = None,
         cause: Exception | None = None,
-    ):
+    ) -> None:
+        """
+        Create a sink configuration error.
+
+        :param message: error message describing the configuration failure.
+        :param reason: machine-readable reason code.
+        :param details: optional structured error details.
+        :param cause: optional original exception.
+        """
         msg = f"log sink configuration error -> {message}"
 
         super().__init__(message=msg, reason=reason, details=details, cause=cause)
 
 
 class LogSinkConfigurationConflictError(LogSinkConfigurationError):
+    """
+    Raised when a sink name is already registered with a different descriptor.
+
+    The package-level sink registry treats same-name, same-descriptor registration
+    as idempotent. Same-name, different-descriptor registration is a conflict.
+    """
+
     def __init__(
         self,
         sink_name: str,
         existing_descriptor: LogSinkDescriptor,
         requested_descriptor: LogSinkDescriptor,
-    ):
+    ) -> None:
+        """
+        Create a sink configuration conflict error.
+
+        :param sink_name: package-level sink name.
+        :param existing_descriptor: descriptor already registered for this name.
+        :param requested_descriptor: descriptor requested by the new configuration.
+        """
         msg = f"log sink '{sink_name}' is already configured with different settings"
         details = {
             "sink_name": sink_name,
@@ -131,12 +189,25 @@ class LogSinkConfigurationConflictError(LogSinkConfigurationError):
 
 
 class LogSinkDescriptorBuildError(LogSinkConfigurationError):
+    """
+    Raised when sink descriptor construction fails.
+
+    This error wraps an exception raised by `sink_cls.build_descriptor(...)`.
+    """
+
     def __init__(
         self,
         sink_name: str,
         sink_class: LogSinkClassProto,
         cause: Exception,
-    ):
+    ) -> None:
+        """
+        Create a descriptor-build failure error.
+
+        :param sink_name: package-level sink name.
+        :param sink_class: sink class used for configuration.
+        :param cause: original descriptor construction exception.
+        """
         msg = f"unable to build descriptor for log sink '{sink_name}' -> {str(cause)}"
         details = {
             "sink_name": sink_name,
@@ -152,12 +223,25 @@ class LogSinkDescriptorBuildError(LogSinkConfigurationError):
 
 
 class LogSinkCreateError(LogSinkConfigurationError):
+    """
+    Raised when sink creation fails.
+
+    This error wraps an exception raised by `sink_cls.create(...)`.
+    """
+
     def __init__(
         self,
         sink_name: str,
         sink_class: LogSinkClassProto,
         cause: Exception,
-    ):
+    ) -> None:
+        """
+        Create a sink creation failure error.
+
+        :param sink_name: package-level sink name.
+        :param sink_class: sink class used for configuration.
+        :param cause: original sink creation exception.
+        """
         msg = f"unable to create log sink '{sink_name}' -> {str(cause)}"
         details = {
             "sink_name": sink_name,
@@ -173,10 +257,21 @@ class LogSinkCreateError(LogSinkConfigurationError):
 
 
 class LogSinkCloseError(LogSinkConfigurationError):
+    """
+    Raised when one or more package-level sinks cannot be closed.
+
+    The error contains structured details for every sink terminator that failed.
+    """
+
     def __init__(
         self,
         causes: tuple[tuple[str, Exception], ...],
-    ):
+    ) -> None:
+        """
+        Create a sink close failure error.
+
+        :param causes: sink names and exceptions raised by their terminators.
+        """
         msg = "unable to close one or more log sinks"
 
         payload_parts: list[dict[str, Any]] = []
@@ -205,11 +300,24 @@ class LogSinkCloseError(LogSinkConfigurationError):
 
 
 class LogSinkIsInUseError(LogSinkConfigurationError):
+    """
+    Raised when a package-level sink cannot be closed because it is still in use.
+
+    A sink is considered in use when it is locally assigned to one or more
+    registered log contexts.
+    """
+
     def __init__(
         self,
         sink_name: str,
         context_namespaces: tuple[str, ...],
-    ):
+    ) -> None:
+        """
+        Create a sink-in-use error.
+
+        :param sink_name: package-level sink name.
+        :param context_namespaces: namespaces of contexts that locally use the sink.
+        """
         context_namespaces_str = ", ".join(context_namespaces)
         msg = f"log sink '{sink_name}' is in use by log contexts: {context_namespaces_str}"
         details = {

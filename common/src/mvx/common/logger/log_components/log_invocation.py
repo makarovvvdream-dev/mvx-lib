@@ -68,9 +68,7 @@ class _ResolvedField:
     unbounded_items: bool
 
 
-PayloadFormatter: TypeAlias = Callable[
-    [LogContextProto, _InvocationEventType, str, dict[str, Any]], dict[str, Any]
-]
+PayloadFormatter: TypeAlias = Callable[[LogContextProto, str, str, dict[str, Any]], dict[str, Any]]
 
 
 def _apply_verbosity_filter(
@@ -190,35 +188,37 @@ def _inject_context_payload(
     *,
     ctx: LogContextProto,
     event: str,
-    event_type: _InvocationEventType,
+    event_outcome: _InvocationEventType,
     field_specs: tuple[str, ...],
     source_kwargs: dict[str, Any],
     payload_formatter: PayloadFormatter | None,
     target_payload: dict[str, Any],
 ) -> dict[str, Any]:
     """
-    Injects context fields and optionally formatted fields into a target payload.
+    Resolve context fields and inject context payload into an outcome payload.
 
-    This function processes context fields specified by `field_specs`, formats them
-    using a `payload_formatter` if provided, and updates the target payload `target_payload`
-    with the resolved and formatted fields.
+    This helper is used by all `log_invocation` outcome emitters. It resolves
+    `context_fields` from the bound function arguments, optionally passes the raw
+    resolved values to `payload_formatter`, and injects the produced context
+    payload into `target_payload`.
 
-    :param ctx: A `LogContextProto` instance that provides the context for the log
-        injection process.
-    :param event: The event name to be associated with the log entry.
-    :param event_type: The type of the invocation event, represented as an
-        `InvocationEventType` instance.
-    :param field_specs: A tuple of field specifications that need to be resolved
-        from `source_kwargs` and included into the payload.
-    :param source_kwargs: A dictionary containing source data that can be used to
-        resolve context fields based on `field_specs`.
-    :param payload_formatter: An optional callable or `PayloadFormatter` instance
-        to format the resolved fields before injecting them into the payload.
-    :param target_payload: A dictionary that represents the target payload where
-        the resolved and optionally formatted fields will be injected.
+    If `payload_formatter` returns a dictionary, that dictionary is injected. If
+    it raises or returns a non-dictionary value, resolved fields are normalized one
+    by one and injected instead.
 
-    :return: The updated target payload dictionary containing the injected context
-        fields and/or formatted payload.
+    Formatter output is protected from overwriting system payload keys. If the
+    produced payload contains any system key, it is placed under the `context` key.
+
+    :param ctx: Effective logging context used for verbosity lookup and value
+        normalization.
+    :param event: Decorated event name.
+    :param event_outcome: Current invocation outcome.
+    :param field_specs: Context field specifications to resolve.
+    :param source_kwargs: Bound function arguments used as the field source.
+    :param payload_formatter: Optional formatter that can shape the resolved raw
+        context fields.
+    :param target_payload: Payload dictionary being built for the current outcome.
+    :return: The updated target payload.
     """
 
     def _inject_to_target(
@@ -252,7 +252,7 @@ def _inject_context_payload(
     if payload_formatter is not None:
         # noinspection PyBroadException
         try:
-            produced = payload_formatter(ctx, event_type, event, dict(raw_fields))
+            produced = payload_formatter(ctx, event_outcome.value, event, dict(raw_fields))
         except Exception:
             produced = None
 
@@ -279,21 +279,19 @@ def _build_logged_kwargs(
     source_kwargs: dict[str, Any],
 ) -> dict[str, Any]:
     """
-    Builds a dictionary of logged keyword arguments based on provided field specifications,
-    source keyword arguments, and the verbosity level provided by Logging context. This function
-    resolves fields, normalizes their values using the logging context, and populates the
-    resulting dictionary accordingly.
+    Build the `kwargs` payload section for the `invoke` outcome.
 
-    :param ctx: Logging context used to normalize field values.
-    :type ctx: LogContextProto
-    :param field_specs: A tuple of field specifications to be resolved from the source
-        keyword arguments.
-    :type field_specs: tuple[str, ...]
-    :param source_kwargs: A dictionary of source keyword arguments to extract fields from.
-    :type source_kwargs: dict[str, Any]
-    :return: A dictionary containing normalized field values based on the resolved field
-        specifications.
-    :rtype: dict[str, Any]
+    The helper resolves `log_kwargs_on_invoke` field specifications from the bound
+    function arguments and normalizes each selected value through the effective
+    logging context.
+
+    Unresolvable field specifications are skipped.
+
+    :param ctx: Effective logging context used for verbosity lookup and value
+        normalization.
+    :param field_specs: Field specifications selected for the `invoke` payload.
+    :param source_kwargs: Bound function arguments used as the field source.
+    :return: Normalized mapping to be stored under the `kwargs` payload key.
     """
     logged: dict[str, Any] = {}
 
@@ -315,21 +313,26 @@ def _build_logged_result(
     result_obj: Any,
 ) -> Any:
     """
-    Generates a structured and normalized log representation of `result_obj`, handling various data types
-    and specifications for selective logging.
+    Build the `result` payload section for the `success` outcome.
 
-    :param ctx: Context object implementing the `LogContextProto` interface, used to normalize values
-                for logging.
-    :type ctx: LogContextProto
-    :param field_specs: A tuple of string specifications used to extract and alias specific fields or
-                        attributes from the `result_obj` for logging; supports dot-separated paths, indexing,
-                        and aliasing.
-    :type field_specs: tuple[str, ...]
-    :param result_obj: The object to be processed and logged; can be a primitive, list, tuple, dictionary,
-                       or composite structure.
-    :return: A normalized representation of the `result_obj` tailored to the specified log structure,
-             or the entire `result_obj` if field specifications are undefined or invalid.
-    :rtype: Any
+    The helper applies `log_result_on_success` field specifications to the returned
+    operation result.
+
+    Behavior depends on the result shape:
+
+    * primitive values are normalized as whole values;
+    * list and tuple results may be selected by index;
+    * dictionary results are normalized as whole dictionaries;
+    * composite objects may be selected by attribute path.
+
+    If no selected fields can be resolved for a list, tuple, or composite object,
+    the helper falls back to whole-result normalization.
+
+    :param ctx: Effective logging context used for value normalization.
+    :param field_specs: Result field specifications. An empty tuple means that the
+        whole result should be logged.
+    :param result_obj: Operation result returned by the decorated callable.
+    :return: Normalized result payload value.
     """
     # Simple primitives: ignore specs and log whole result
     if isinstance(result_obj, (str, int, float, bool)) or result_obj is None:
@@ -526,6 +529,53 @@ def log_invocation(
     ctx: LogContextProto | None = None,
     entity_id_getter: Callable[[], str] | None = None,
 ) -> Callable[[F], F]:
+    """
+    Decorate a public API operation with structured lifecycle logging.
+
+    The decorated callable is treated as one event. The decorator may emit log
+    records for that event with different outcomes:
+
+    * ``invoke`` before the operation body starts;
+    * ``success`` after successful completion;
+    * ``failed`` when the operation raises an ordinary exception;
+    * ``cancelled`` when the operation raises ``asyncio.CancelledError``.
+
+    The decorator does not create or configure a logging context. It either uses
+    the explicit ``ctx`` argument or resolves a context from the first positional
+    argument through ``LogContextProviderProto``.
+
+    The original return value, exception, and cancellation semantics are preserved.
+
+    :param event: event name for the decorated operation. Must match
+        ``^[A-Za-z_.]+$``.
+    :param invoke_level: level used for the ``invoke`` outcome.
+    :param success_level: level used for the ``success`` outcome.
+    :param error_level: level used for a full ``failed`` outcome.
+    :param error_level_suppressed: level used for a suppressed ``failed`` outcome.
+    :param cancel_level: level used for the ``cancelled`` outcome.
+    :param log_closures_on_invoke: values captured from the surrounding scope and
+        added to the ``invoke`` payload under the ``closures`` key.
+    :param context_fields: field specifications resolved for every emitted
+        outcome.
+    :param context_formatter: optional formatter that can shape payload data
+        produced from ``context_fields``.
+    :param log_kwargs_on_invoke: field specifications resolved only for the
+        ``invoke`` outcome and added under the ``kwargs`` payload key.
+    :param log_result_on_success: result logging configuration. ``None`` disables
+        result logging, an empty tuple logs the whole result, and a non-empty tuple
+        selects result fields.
+    :param log_error_policy: rules controlling whether matching exception types
+        produce a full or suppressed ``failed`` outcome.
+    :param ctx: explicit logging context. If omitted, the decorator resolves the
+        context from the first positional argument.
+    :param entity_id_getter: optional zero-argument callable used to provide
+        ``LogEventMeta.entity_id``. If omitted, the decorator tries to resolve an
+        identity from the first positional argument.
+    :return: a decorator that wraps the target callable.
+    :raises ValueError: if ``event`` has an invalid name.
+    :raises RuntimeError: if no logging context can be resolved when the decorated
+        callable is invoked.
+    """
 
     def decorate(func: F) -> F:
 
@@ -555,7 +605,7 @@ def log_invocation(
             _inject_context_payload(
                 ctx=effective_ctx,
                 event=event,
-                event_type=_InvocationEventType.INVOKE,
+                event_outcome=_InvocationEventType.INVOKE,
                 field_specs=context_fields,
                 source_kwargs=effective_kwargs,
                 payload_formatter=context_formatter,
@@ -575,7 +625,7 @@ def log_invocation(
                 LogEvent(
                     level=invoke_level,
                     meta=event_meta,
-                    event_type=_InvocationEventType.INVOKE.value,
+                    event_outcome=_InvocationEventType.INVOKE.value,
                     timestamp=time.time(),
                     payload=invoke_data,
                 )
@@ -599,7 +649,7 @@ def log_invocation(
             _inject_context_payload(
                 ctx=effective_ctx,
                 event=event,
-                event_type=_InvocationEventType.CANCELLED,
+                event_outcome=_InvocationEventType.CANCELLED,
                 field_specs=context_fields,
                 source_kwargs=effective_kwargs,
                 payload_formatter=context_formatter,
@@ -610,7 +660,7 @@ def log_invocation(
                 LogEvent(
                     level=cancel_level,
                     meta=event_meta,
-                    event_type=_InvocationEventType.CANCELLED.value,
+                    event_outcome=_InvocationEventType.CANCELLED.value,
                     timestamp=time.time(),
                     payload=payload,
                 )
@@ -629,7 +679,7 @@ def log_invocation(
             _inject_context_payload(
                 ctx=effective_ctx,
                 event=event,
-                event_type=_InvocationEventType.FAILED,
+                event_outcome=_InvocationEventType.FAILED,
                 field_specs=context_fields,
                 source_kwargs=effective_kwargs,
                 payload_formatter=context_formatter,
@@ -649,7 +699,7 @@ def log_invocation(
                                 LogEvent(
                                     level=error_level,
                                     meta=event_meta,
-                                    event_type=_InvocationEventType.FAILED.value,
+                                    event_outcome=_InvocationEventType.FAILED.value,
                                     timestamp=time.time(),
                                     payload=payload,
                                 )
@@ -660,7 +710,7 @@ def log_invocation(
                                 LogEvent(
                                     level=error_level_suppressed,
                                     meta=event_meta,
-                                    event_type=_InvocationEventType.FAILED.value,
+                                    event_outcome=_InvocationEventType.FAILED.value,
                                     timestamp=time.time(),
                                     payload=payload,
                                 )
@@ -676,7 +726,7 @@ def log_invocation(
                         LogEvent(
                             level=error_level,
                             meta=event_meta,
-                            event_type=_InvocationEventType.FAILED.value,
+                            event_outcome=_InvocationEventType.FAILED.value,
                             timestamp=time.time(),
                             payload=payload,
                         )
@@ -688,7 +738,7 @@ def log_invocation(
                         LogEvent(
                             level=error_level_suppressed,
                             meta=event_meta,
-                            event_type=_InvocationEventType.FAILED.value,
+                            event_outcome=_InvocationEventType.FAILED.value,
                             timestamp=time.time(),
                             payload=payload,
                         )
@@ -705,7 +755,7 @@ def log_invocation(
             _inject_context_payload(
                 ctx=effective_ctx,
                 event=event,
-                event_type=_InvocationEventType.SUCCESS,
+                event_outcome=_InvocationEventType.SUCCESS,
                 field_specs=context_fields,
                 source_kwargs=effective_kwargs,
                 payload_formatter=context_formatter,
@@ -723,7 +773,7 @@ def log_invocation(
                 LogEvent(
                     level=success_level,
                     meta=event_meta,
-                    event_type=_InvocationEventType.SUCCESS.value,
+                    event_outcome=_InvocationEventType.SUCCESS.value,
                     timestamp=time.time(),
                     payload=payload,
                 )

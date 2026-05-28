@@ -22,7 +22,7 @@ def make_event(
     level: int = logging.INFO,
     event_namespace: str | None = "mvx.ldap",
     event_name: str = "bind.success",
-    event_type: str | None = "operation",
+    event_outcome: str | None = "operation",
     timestamp: float = 1_700_000_000.123,
     entity_id: str | None = "conn-1",
     payload: Mapping[str, Any] | None = None,
@@ -40,7 +40,7 @@ def make_event(
             source_line=source_line,
             source_func=source_func,
         ),
-        event_type=event_type,
+        event_outcome=event_outcome,
         timestamp=timestamp,
         payload=payload if payload is not None else {"result": "ok"},
     )
@@ -163,7 +163,7 @@ def test_b02_message_uses_custom_entity_id() -> None:
 
 
 def test_b03_message_uses_custom_event_type() -> None:
-    event = make_event(event_type="lifecycle")
+    event = make_event(event_outcome="lifecycle")
 
     record = make_log_record_from_event("mvx.test.logger", event)
 
@@ -196,7 +196,7 @@ def test_b06_message_omits_entity_id_when_missing() -> None:
 
 
 def test_b07_message_omits_event_type_when_missing() -> None:
-    event = make_event(event_type=None)
+    event = make_event(event_outcome=None)
 
     record = make_log_record_from_event("mvx.test.logger", event)
 
@@ -225,7 +225,7 @@ def test_b09_message_contains_only_event_name_when_namespace_and_entity_id_are_m
 def test_b10_message_omits_namespace_and_event_type_when_both_are_missing() -> None:
     event = make_event(
         event_namespace=None,
-        event_type=None,
+        event_outcome=None,
     )
 
     record = make_log_record_from_event("mvx.test.logger", event)
@@ -289,11 +289,11 @@ def test_d02_record_event_name_custom_field_is_event_name() -> None:
 
 
 def test_d03_record_event_type_custom_field_is_event_type() -> None:
-    event = make_event(event_type="lifecycle")
+    event = make_event(event_outcome="lifecycle")
 
     record = make_log_record_from_event("mvx.test.logger", event)
 
-    assert get_record_extra(record, "event_type") == "lifecycle"
+    assert get_record_extra(record, "event_outcome") == "lifecycle"
 
 
 def test_d04_record_entity_id_custom_field_is_entity_id() -> None:
@@ -347,11 +347,11 @@ def test_d07_record_namespace_custom_field_uses_not_defined_when_missing() -> No
 
 
 def test_d08_record_event_type_custom_field_uses_not_defined_when_missing() -> None:
-    event = make_event(event_type=None)
+    event = make_event(event_outcome=None)
 
     record = make_log_record_from_event("mvx.test.logger", event)
 
-    assert get_record_extra(record, "event_type") == "<not defined>"
+    assert get_record_extra(record, "event_outcome") == "<not defined>"
 
 
 def test_d09_record_entity_id_custom_field_uses_not_defined_when_missing() -> None:
@@ -368,7 +368,8 @@ def test_d09_record_entity_id_custom_field_uses_not_defined_when_missing() -> No
 def test_e01_default_format_can_format_record() -> None:
     event = make_event(payload={"result": "ok"})
     formatter = logging.Formatter(
-        "%(asctime)s %(levelname)s: " "%(event_name)s [%(event_type)s:%(entity_id)s] %(payload)s",
+        "%(asctime)s %(levelname)s: "
+        "%(event_name)s [%(event_outcome)s:%(entity_id)s] %(payload)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 

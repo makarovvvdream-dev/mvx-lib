@@ -111,7 +111,7 @@ ctx = configure_log_context("my_app")
 ctx.log_info_event(
     event="request.completed",
     event_namespace="my_app.http",
-    event_type="success",
+    event_outcome="success",
     entity_id="request-42",
     source_path="app/api.py",
     source_line=120,
@@ -122,7 +122,7 @@ ctx.log_info_event(
 )
 ```
 
-These fields are optional. `entity_id` and source-code fields are part of event metadata. `event_type` describes the emitted event itself, for example an invocation outcome such as `invoke`, `success`, `failed`, or `cancelled`.
+These fields are optional. `entity_id` and source-code fields are part of event metadata. `event_outcome` describes the outcome of the emitted event, for example an invocation outcome such as `invoke`, `success`, `failed`, or `cancelled`.
 
 Before preparing the final event payload, the context checks the event policy if one is set for that context. The policy receives only event metadata. If the policy rejects the event, the payload is not normalized and the event is not passed to the sink.
 

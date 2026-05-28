@@ -442,28 +442,92 @@ def configure_log_sink(
     sink_cls: LogSinkClassProto,
     **sink_kwargs: Any,
 ) -> LogSinkProto:
+    """
+    Configure or retrieve a package-level named log sink.
+
+    If no sink is registered under `name`, the function asks `sink_cls` to build a
+    descriptor, creates the sink, stores it in the package-level sink registry, and
+    returns it.
+
+    If a sink with the same name and the same descriptor is already registered, the
+    existing sink is returned.
+
+    If a sink with the same name but a different descriptor is already registered,
+    a configuration conflict is raised.
+
+    :param name: package-level sink name.
+    :param sink_cls: sink class implementing the package-managed sink factory
+        contract.
+    :param sink_kwargs: sink-specific configuration arguments passed to
+        `sink_cls.build_descriptor()` and `sink_cls.create()`.
+    :return: configured log sink.
+    :raises TypeError: if `name` is not a string.
+    :raises ValueError: if `name` is malformed.
+    :raises LogSinkDescriptorBuildError: if descriptor construction fails.
+    :raises LogSinkCreateError: if sink creation fails.
+    :raises LogSinkConfigurationConflictError: if the name is already registered
+        with a different descriptor.
+    """
     _validate_log_sink_name("name", name)
     with _log_context_wiring_lock:
         return _log_sink_registry.register(name=name, sink_cls=sink_cls, **sink_kwargs)
 
 
 def get_log_sink(name: str) -> LogSinkProto | None:
+    """
+    Return a package-level sink by name.
+
+    :param name: package-level sink name.
+    :return: registered sink, or None if no sink is registered under this name.
+    :raises TypeError: if `name` is not a string.
+    :raises ValueError: if `name` is malformed.
+    """
     _validate_log_sink_name("name", name)
     with _log_context_wiring_lock:
         return _log_sink_registry.get(name=name)
 
 
 def get_configured_log_sink_names() -> tuple[str, ...]:
+    """
+    Return names of package-level configured sinks.
+
+    :return: tuple of registered sink names.
+    """
     with _log_context_wiring_lock:
         return _log_sink_registry.get_sinks_names()
 
 
 def has_configured_log_sinks() -> bool:
+    """
+    Return whether the package-level sink registry contains any sinks.
+
+    :return: True if at least one sink is registered, False otherwise.
+    """
     with _log_context_wiring_lock:
         return not _log_sink_registry.is_empty()
 
 
 def close_log_sink(name: str) -> bool:
+    """
+    Close and unregister a package-level sink by name.
+
+    If no sink is registered under `name`, the function returns False.
+
+    A sink cannot be closed while it is locally assigned to any package-level
+    registered context. In that case, `LogSinkIsInUseError` is raised.
+
+    On successful close, the sink is removed from the registry and its terminator
+    is called.
+
+    :param name: package-level sink name.
+    :return: True if a registered sink was closed, False if the name was not
+        registered.
+    :raises TypeError: if `name` is not a string.
+    :raises ValueError: if `name` is malformed.
+    :raises LogSinkIsInUseError: if the sink is locally assigned to one or more
+        registered contexts.
+    :raises LogSinkCloseError: if the sink terminator fails.
+    """
     _validate_log_sink_name("name", name)
 
     with _log_context_wiring_lock:
@@ -487,6 +551,14 @@ def close_log_sink(name: str) -> bool:
 
 
 def get_root_log_context() -> LogContext:
+    """
+    Return the package-level root log context.
+
+    The root context is created during package bootstrap and provides the default
+    logging infrastructure for package-managed child contexts.
+
+    :return: root log context.
+    """
     with _log_context_wiring_lock:
         return _log_context_registry.get_root_log_context()
 
@@ -494,6 +566,15 @@ def get_root_log_context() -> LogContext:
 def get_log_context(
     namespace: str,
 ) -> LogContext | None:
+    """
+    Return a package-level log context by namespace.
+
+    :param namespace: registered context namespace.
+    :return: log context registered under `namespace`, or None if no such context
+        exists.
+    :raises TypeError: if `namespace` is not a string.
+    :raises ValueError: if `namespace` is empty or malformed.
+    """
 
     _validate_namespace("namespace", namespace)
 
@@ -509,7 +590,27 @@ def configure_log_context(
     payload_processor: LogPayloadProcessorProto | None = None,
     log_error_handling_policy: LogErrorHandlingPolicy | None = None,
 ) -> LogContext:
+    """
+    Create or update a package-level log context.
 
+    If the namespace already exists, only explicitly supplied local components are
+    updated. Passing None does not reset an existing local component.
+
+    If the namespace does not exist, missing parent contexts are created
+    automatically and the supplied components are applied only to the requested
+    leaf context.
+
+    :param namespace: context namespace to configure.
+    :param log_sink: optional local sink for the configured context.
+    :param event_policy: optional local event policy for the configured context.
+    :param payload_processor: optional local payload processor for the configured
+        context.
+    :param log_error_handling_policy: optional local logging infrastructure error
+        handling policy for the configured context.
+    :return: created or updated log context.
+    :raises TypeError: if `namespace` is not a string.
+    :raises ValueError: if `namespace` is empty or malformed.
+    """
     _validate_namespace("namespace", namespace)
 
     with _log_context_wiring_lock:
@@ -537,11 +638,26 @@ def configure_log_context(
 
 
 def get_log_context_namespaces() -> tuple[str, ...]:
+    """
+    Return namespaces of package-level registered log contexts.
+
+    The returned tuple includes the root context namespace.
+
+    :return: tuple of registered context namespaces.
+    """
     with _log_context_wiring_lock:
         return _log_context_registry.list_namespaces()
 
 
 def has_log_context(namespace: str) -> bool:
+    """
+    Return whether a package-level log context exists for the namespace.
+
+    :param namespace: context namespace to check.
+    :return: True if a context is registered under `namespace`, False otherwise.
+    :raises TypeError: if `namespace` is not a string.
+    :raises ValueError: if `namespace` is empty or malformed.
+    """
     _validate_namespace("namespace", namespace)
 
     with _log_context_wiring_lock:
@@ -549,11 +665,28 @@ def has_log_context(namespace: str) -> bool:
 
 
 def reset_log_contexts() -> None:
+    """
+    Remove all package-level non-root log contexts.
+
+    The root context remains registered. Registered sinks are not closed or removed.
+
+    :return: None.
+    """
     with _log_context_wiring_lock:
         _log_context_registry.clear()
 
 
 def reset_logger() -> None:
+    """
+    Reset package-level logger state.
+
+    The function closes all package-level registered sinks, clears package-level
+    registries, and recreates the default bootstrap state.
+
+    :return: None.
+    :raises LogSinkCloseError: if one or more registered sink terminators fail
+        during reset.
+    """
     global _log_sink_registry, _log_context_registry
 
     with _log_context_wiring_lock:

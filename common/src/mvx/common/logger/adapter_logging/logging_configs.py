@@ -1,14 +1,13 @@
 # src/mvx/common/logger/adapter_logging/logging_configs.py
 """
-Configuration helpers for sinks backed by Python's standard logging package.
+Configuration objects for sinks backed by Python's standard logging package.
 
-This module defines small configuration objects that create and configure
-``logging.Handler`` instances for logger-backed sinks. The configuration layer
-owns formatter, filter, level and handler setup, while concrete sinks remain
-responsible for delivering ``LogEvent`` objects.
+This module provides small configuration classes that create and configure
+`logging.Handler` instances for ready-to-use logger-backed sinks.
 """
 
 from __future__ import annotations
+from enum_tools.documentation import document_enum
 
 from typing import Callable, TypeAlias
 from abc import ABC, abstractmethod
@@ -34,39 +33,33 @@ __all__ = (
 
 # ---- Logging configs ---------------------------------------------------------------------
 
-
+# Default format used by logger-backed sink configurations.
 DEFAULT_LOG_FORMAT = "%(asctime)s %(levelname)s: %(message)s %(payload)s"
 
+# Default date/time format used by logger-backed sink configurations.
 DEFAULT_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
-# Formatter factory signature:
-#   input:  log format string, date format string
-#   output: configured logging.Formatter instance
+# Callable used to create a configured standard-library formatter.
+#
+# The callable receives a log format string and a date format string, and
+# returns a `logging.Formatter` instance.
 FormatterFactory: TypeAlias = Callable[[str, str], logging.Formatter]
 
-# Logging filter signature:
-#   input:  logging.LogRecord
-#   output: True to keep the record, False to drop it
-# A logging.Filter instance is also accepted because stdlib logging supports it.
+# Filter accepted by logger-backed sink configurations.
+#
+# A value may be either a `logging.Filter` instance or a callable accepting a
+# `logging.LogRecord` and returning True to keep the record or False to drop it.
 LogFilter: TypeAlias = logging.Filter | Callable[[logging.LogRecord], bool]
 
 
 class LoggingBaseConfig(ABC):
     """
-    Base configuration for logger-backed sinks.
+    Base configuration for logger-backed ready-to-use sinks.
 
-    Subclasses provide the concrete handler, while the base class applies the
-    shared logger setup: formatter, filters, levels, propagation and handler
+    Subclasses create a concrete `logging.Handler`. The base configuration applies
+    shared logger setup: formatter, filters, levels, propagation, and handler
     replacement.
-
-    Args:
-        level: Minimum log level accepted by the logger and handler.
-        log_format: Format string passed to ``logging.Formatter``.
-        date_format: Date/time format passed to ``logging.Formatter``.
-        formatter_factory: Optional factory used to create a custom formatter.
-        filters: Optional tuple of logging filters or filter callables attached
-            to the created handler.
     """
 
     __slots__ = ("_level", "_log_format", "_date_format", "_formatter_factory", "_filters")
@@ -80,6 +73,17 @@ class LoggingBaseConfig(ABC):
         formatter_factory: FormatterFactory | None = None,
         filters: tuple[LogFilter, ...] | None = None,
     ) -> None:
+        """
+        Create a base logger-backed sink configuration.
+
+        :param level: minimum log level accepted by the logger and handler.
+        :param log_format: format string passed to `logging.Formatter`.
+        :param date_format: date/time format passed to `logging.Formatter`.
+        :param formatter_factory: optional factory used to create a custom formatter.
+        :param filters: optional tuple of logging filters or filter callables attached
+            to the created handler.
+        :raises TypeError: if an argument has an invalid type.
+        """
 
         if not isinstance(level, LogLevel):
             raise TypeError("level must be an instance of LogLevel")
@@ -111,47 +115,58 @@ class LoggingBaseConfig(ABC):
 
     @property
     def level(self) -> LogLevel:
+        """
+        Return the minimum log level accepted by the logger and handler.
+
+        :return: configured minimum log level.
+        """
         return self._level
 
     @property
     def log_format(self) -> str:
+        """
+        Return the log format string.
+
+        :return: format string passed to `logging.Formatter`.
+        """
         return self._log_format
 
     @property
     def date_format(self) -> str:
+        """
+        Return the date/time format string.
+
+        :return: date/time format passed to `logging.Formatter`.
+        """
         return self._date_format
 
     @property
     def filters(self) -> tuple[LogFilter, ...]:
+        """
+        Return filters attached to the created handler.
+
+        :return: tuple of logging filters or filter callables.
+        """
         return self._filters
 
     @abstractmethod
     def _get_handler(self) -> logging.Handler:
-        """
-        Create a logging handler for this configuration.
-
-        Returns:
-            A new ``logging.Handler`` instance.
-        """
         raise NotImplementedError()
 
     def apply_config_to_logger(self, logger: logging.Logger) -> logging.Handler:
         """
-        Apply this configuration to a logger.
+        Apply this configuration to a standard-library logger.
 
-        Existing handlers are removed before the new handler is attached.
-        Replaced file handlers are closed; standard stream handlers are detached
-        but not closed.
+        The method creates a new handler, configures formatter, filters and level,
+        removes existing handlers, disables propagation, and attaches the new handler.
 
-        Args:
-            logger: Logger instance to configure.
+        Existing file handlers are closed. Existing non-file handlers are removed but
+        not closed.
 
-        Returns:
-            The handler created and attached to the logger.
-
-        Raises:
-            TypeError: If ``logger`` is not a ``logging.Logger`` instance, or if
-                a custom formatter factory returns a non-formatter object.
+        :param logger: standard-library logger to configure.
+        :return: created and attached handler.
+        :raises TypeError: if `logger` is not a `logging.Logger` instance or if
+            `formatter_factory` returns a non-formatter object.
         """
         if not isinstance(logger, logging.Logger):
             raise TypeError("logger must be an instance of logging.Logger")
@@ -193,27 +208,24 @@ class LoggingBaseConfig(ABC):
         return handler
 
 
+@document_enum
 class LogStreamOutput(StrEnum):
     """
-    Supported standard stream targets for stream-based logging.
+    Standard stream targets supported by `LoggingStreamConfig`.
     """
 
+    #: Standard output stream.
     STDOUT = "stdout"
+
+    #: Standard error stream.
     STDERR = "stderr"
 
 
 class LoggingStreamConfig(LoggingBaseConfig):
     """
-    Configuration for a logger-backed stdout or stderr sink.
+    Configuration for a logger-backed stream sink.
 
-    Args:
-        stream_output: Standard stream target used by the created handler.
-        level: Minimum log level accepted by the logger and handler.
-        log_format: Format string passed to ``logging.Formatter``.
-        date_format: Date/time format passed to ``logging.Formatter``.
-        formatter_factory: Optional factory used to create a custom formatter.
-        filters: Optional tuple of logging filters or filter callables attached
-            to the created handler.
+    The configuration creates a `logging.StreamHandler` targeting stdout or stderr.
     """
 
     __slots__ = ("_stream_output",)
@@ -228,6 +240,18 @@ class LoggingStreamConfig(LoggingBaseConfig):
         formatter_factory: FormatterFactory | None = None,
         filters: tuple[LogFilter, ...] | None = None,
     ) -> None:
+        """
+        Create a stream sink configuration.
+
+        :param stream_output: standard stream target used by the created handler.
+        :param level: minimum log level accepted by the logger and handler.
+        :param log_format: format string passed to `logging.Formatter`.
+        :param date_format: date/time format passed to `logging.Formatter`.
+        :param formatter_factory: optional factory used to create a custom formatter.
+        :param filters: optional tuple of logging filters or filter callables attached
+            to the created handler.
+        :raises TypeError: if an argument has an invalid type.
+        """
         super().__init__(
             level,
             log_format=log_format,
@@ -242,6 +266,11 @@ class LoggingStreamConfig(LoggingBaseConfig):
 
     @property
     def stream_output(self) -> LogStreamOutput:
+        """
+        Return the configured stream target.
+
+        :return: standard stream target.
+        """
         return self._stream_output
 
     def _get_handler(self) -> logging.Handler:
@@ -255,16 +284,7 @@ class LoggingFileConfig(LoggingBaseConfig):
     """
     Configuration for a logger-backed file sink.
 
-    Args:
-        file_path: Path to the log file.
-        level: Minimum log level accepted by the logger and handler.
-        mode: File opening mode passed to ``logging.FileHandler``.
-        encoding: File encoding passed to ``logging.FileHandler``.
-        log_format: Format string passed to ``logging.Formatter``.
-        date_format: Date/time format passed to ``logging.Formatter``.
-        formatter_factory: Optional factory used to create a custom formatter.
-        filters: Optional tuple of logging filters or filter callables attached
-            to the created handler.
+    The configuration creates a `logging.FileHandler` for the configured file path.
     """
 
     __slots__ = ("_file_path", "_mode", "_encoding")
@@ -281,6 +301,20 @@ class LoggingFileConfig(LoggingBaseConfig):
         formatter_factory: FormatterFactory | None = None,
         filters: tuple[LogFilter, ...] | None = None,
     ) -> None:
+        """
+        Create a file sink configuration.
+
+        :param file_path: path to the log file.
+        :param level: minimum log level accepted by the logger and handler.
+        :param mode: file opening mode passed to `logging.FileHandler`.
+        :param encoding: file encoding passed to `logging.FileHandler`.
+        :param log_format: format string passed to `logging.Formatter`.
+        :param date_format: date/time format passed to `logging.Formatter`.
+        :param formatter_factory: optional factory used to create a custom formatter.
+        :param filters: optional tuple of logging filters or filter callables attached
+            to the created handler.
+        :raises TypeError: if an argument has an invalid type.
+        """
         super().__init__(
             level,
             log_format=log_format,
@@ -304,14 +338,29 @@ class LoggingFileConfig(LoggingBaseConfig):
 
     @property
     def file_path(self) -> str | os.PathLike[str]:
+        """
+        Return the configured log file path.
+
+        :return: log file path.
+        """
         return self._file_path
 
     @property
     def mode(self) -> str:
+        """
+        Return the configured file opening mode.
+
+        :return: file opening mode.
+        """
         return self._mode
 
     @property
     def encoding(self) -> str:
+        """
+        Return the configured file encoding.
+
+        :return: file encoding.
+        """
         return self._encoding
 
     def _get_handler(self) -> logging.Handler:
