@@ -25,10 +25,10 @@ common/pyproject.toml
 
 ## Requirements
 
-`mvx-common` requires Python 3.13 or newer.
+`mvx-common` requires Python 3.11 or newer.
 
 ```text
-Python >= 3.13
+Python >= 3.11
 ```
 
 ## Installation for development
