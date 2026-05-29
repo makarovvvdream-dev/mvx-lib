@@ -3,7 +3,7 @@ name = "mvx-common"
 version = "0.2.0"
 description = "Common utilities for MVX Python packages."
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [
@@ -12,6 +12,8 @@ authors = [
 classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
@@ -44,11 +46,11 @@ asyncio_mode = "auto"
 
 [tool.black]
 line-length = 100
-target-version = ["py313"]
+target-version = ["py311", "py312", "py313"]
 
 [tool.mypy]
 files = ["src"]
-python_version = "3.13"
+python_version = "3.11"
 strict = false
 warn_unused_ignores = true
 warn_return_any = true
@@ -61,7 +63,7 @@ mypy_path = ["src"]
 [tool.ruff]
 line-length = 100
 src = ["src"]
-target-version = "py313"
+target-version = "py311"
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = [

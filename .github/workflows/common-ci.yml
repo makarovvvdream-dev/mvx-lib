@@ -8,8 +8,13 @@ on:
 
 jobs:
   lint-type-test:
-    name: lint, type-check, test
+    name: lint, type-check, test / Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
 
     defaults:
       run:
@@ -19,10 +24,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
 
-      - name: Set up Python 3.13
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python-version }}
           cache: "pip"
           cache-dependency-path: common/pyproject.toml
 
