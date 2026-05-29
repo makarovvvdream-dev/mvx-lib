@@ -18,6 +18,13 @@ classifiers = [
 ]
 dependencies = [
 ]
+
+[project.urls]
+Documentation = "https://mvx-lib.readthedocs.io/en/latest/"
+Source = "https://github.com/makarovvvdream-dev/mvx-lib"
+Issues = "https://github.com/makarovvvdream-dev/mvx-lib/issues"
+Changelog = "https://mvx-lib.readthedocs.io/en/latest/common/version_history/"
+
 [project.optional-dependencies]
 dev = [
     "pytest",
