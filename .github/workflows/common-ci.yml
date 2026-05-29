@@ -1,0 +1,44 @@
+name: common-ci
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  lint-type-test:
+    name: lint, type-check, test
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: common
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: "pip"
+          cache-dependency-path: common/pyproject.toml
+
+      - name: Install package with dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Check formatting with Black
+        run: black --check src tests
+
+      - name: Lint with Ruff
+        run: ruff check src tests
+
+      - name: Type-check with mypy
+        run: mypy
+
+      - name: Run tests
+        run: pytest
