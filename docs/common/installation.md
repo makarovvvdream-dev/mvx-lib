@@ -27,13 +27,11 @@ python3 --version
 
 ## Installing from PyPI
 
-When `mvx-common` is published to PyPI, install it with `pip`:
+Install `mvx-common` from PyPI with `pip`:
 
 ```bash
 python -m pip install mvx-common
 ```
-
-Using `python -m pip` is recommended because it makes sure that `pip` belongs to the same Python interpreter that will run your code.
 
 After installation, the package can be imported through the `mvx` namespace:
 
@@ -46,7 +44,7 @@ from mvx.common.logger import LogContext
 To install a specific released version:
 
 ```bash
-python -m pip install "mvx-common==0.2.0"
+python -m pip install "mvx-common==0.2.1"
 ```
 
 To upgrade to the latest available version:
@@ -107,7 +105,7 @@ cd common
 python -m pip install -e ".[dev]"
 ```
 
-This installs the package in editable mode together with development tools such as test and type-checking dependencies.
+This installs the package in editable mode together with development tools such as test, coverage, linting, formatting, and type-checking dependencies.
 
 ## Installing documentation dependencies
 
@@ -143,14 +141,16 @@ docs/_build/html
 
 Open the generated documentation in a browser from that directory.
 
-## Running tests
+## Running checks
 
-Run tests from the package directory:
+Run package checks from the package directory:
 
 ```bash
 cd common
-pytest
+scripts/check.sh
 ```
+
+The check script runs formatting, linting, type checking, tests, and branch coverage checks.
 
 ## Package name and import path
 
@@ -216,9 +216,9 @@ Without quotes, `zsh` may try to interpret square brackets as a glob pattern.
 
 ### package is not found on PyPI
 
-If `pip` cannot find `mvx-common`, the package version may not be published yet.
+If `pip` cannot find `mvx-common`, check the package name, Python version, and selected package index.
 
-Use local editable installation from the repository:
+For local development, use editable installation from the repository:
 
 ```bash
 cd common
@@ -236,7 +236,7 @@ python -m pip install mvx-common
 For a specific version:
 
 ```bash
-python -m pip install "mvx-common==0.2.0"
+python -m pip install "mvx-common==0.2.1"
 ```
 
 For local development:

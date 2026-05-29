@@ -6,8 +6,41 @@ on:
       - "common-v*-rc*"
 
 jobs:
+  check:
+    name: check / Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    defaults:
+      run:
+        working-directory: common
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+          cache-dependency-path: common/pyproject.toml
+
+      - name: Install package with dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run package checks
+        run: scripts/check.sh
+
   build:
     name: build distribution
+    needs: check
     runs-on: ubuntu-latest
 
     defaults:
@@ -34,7 +67,7 @@ jobs:
         run: python -m build
 
       - name: Upload distributions
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: mvx-common-dist
           path: common/dist/*
@@ -52,7 +85,7 @@ jobs:
 
     steps:
       - name: Download distributions
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           name: mvx-common-dist
           path: dist
