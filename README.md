@@ -1,5 +1,7 @@
 # mvx-lib
 
+[![common-ci](https://github.com/makarovvvdream-dev/mvx-lib/actions/workflows/common-ci.yml/badge.svg)](https://github.com/makarovvvdream-dev/mvx-lib/actions/workflows/common-ci.yml)
+
 `mvx-lib` is a monorepo for MVX Python packages.
 
 The repository is intended to host several related packages under one codebase and one documentation site.
@@ -70,11 +72,23 @@ To include documentation dependencies:
 python -m pip install -e ".[dev,docs]"
 ```
 
-Run package checks from the `common` directory:
+Run package checks from the repository root:
 
 ```bash
+cd common
 scripts/check.sh
 ```
+
+The check script runs formatting, linting, type checking, tests, and coverage:
+
+```text
+black
+ruff
+mypy
+pytest with branch coverage
+```
+
+The package currently requires at least 90% branch coverage.
 
 ## Repository status
 

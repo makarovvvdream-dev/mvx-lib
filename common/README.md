@@ -1,5 +1,7 @@
 # MVX Common
 
+[![common-ci](https://github.com/makarovvvdream-dev/mvx-lib/actions/workflows/common-ci.yml/badge.svg)](https://github.com/makarovvvdream-dev/mvx-lib/actions/workflows/common-ci.yml)
+
 `mvx-common` is a Python package with common utilities used by MVX Python projects.
 
 It provides reusable infrastructure for:
@@ -46,14 +48,24 @@ To install documentation dependencies as well:
 python -m pip install -e ".[dev,docs]"
 ```
 
-## Running tests
+## Running checks
 
 From the package directory:
 
 ```bash
-cd common
-pytest
+scripts/check.sh
 ```
+
+The check script runs:
+
+```text
+black --check
+ruff check
+mypy
+pytest with branch coverage
+```
+
+The package requires at least 90% branch coverage.
 
 ## Building documentation
 

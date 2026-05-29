@@ -46,4 +46,4 @@ jobs:
         run: mypy
 
       - name: Run tests
-        run: pytest
+        run: pytest --cov=mvx.common --cov-report=term-missing
