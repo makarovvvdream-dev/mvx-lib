@@ -1,7 +1,7 @@
 # src/mvx/common/logger/log_context/log_context.py
 from __future__ import annotations
 
-from enum_tools.documentation import document_enum
+from mvx.common.helpers.document_enum import document_enum
 
 from typing import Mapping, Any, overload
 

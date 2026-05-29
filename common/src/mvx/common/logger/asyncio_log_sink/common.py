@@ -1,6 +1,6 @@
 # src/mvx/common/logger/asyncio_log_sink/common.py
 from __future__ import annotations
-from enum_tools.documentation import document_enum
+from mvx.common.helpers.document_enum import document_enum
 
 from enum import StrEnum
 

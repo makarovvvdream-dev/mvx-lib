@@ -7,7 +7,7 @@ This module provides small configuration classes that create and configure
 """
 
 from __future__ import annotations
-from enum_tools.documentation import document_enum
+from mvx.common.helpers.document_enum import document_enum
 
 from typing import Callable, TypeAlias
 from abc import ABC, abstractmethod
