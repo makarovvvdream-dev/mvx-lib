@@ -25,10 +25,9 @@ Still, mistakes are possible. If you find an error in the code or in the documen
 I am open to collaboration, feedback, and practical feature requests. If you are using this logger, evaluating it, or missing something important for your project, I am happy to discuss it.
 
 Source code is available on [GitHub](https://github.com/makarovvvdream-dev/mvx-lib).
-
+For bugs and feature requests, please use GitHub Issues.
+For collaboration or direct discussion, contact me at makarovvv.dream@gmail.com.
 
 All the best,
 
 Vladimir Makarov
-
-makarovvv.dream@gmail.com
