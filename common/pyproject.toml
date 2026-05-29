@@ -4,8 +4,15 @@ version = "0.2.0"
 description = "Common utilities for MVX Python packages."
 readme = "README.md"
 requires-python = ">=3.13"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 authors = [
     { name = "Vladimir Makarov" }
+]
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
 ]
