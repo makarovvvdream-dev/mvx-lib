@@ -33,7 +33,7 @@ decoration time
     validate static configuration and build the wrapper
 
 call time
-    resolve context, arguments, entity id, and metadata
+    resolve arguments and context; when logging is enabled, resolve entity id and metadata
 
 outcome time
     build outcome payloads and emit LogEvent records
@@ -81,7 +81,7 @@ decorate(func)
 wrapped callable
 ```
 
-The wrapper is the runtime part. It resolves the logging context, builds metadata, emits lifecycle outcomes, calls the original function, and preserves the original return/exception/cancellation semantics.
+The wrapper is the runtime part. It resolves the logging context, calls the original function, and preserves the original return/exception/cancellation semantics. When decorator-driven logging is enabled for the call, it also builds metadata and emits lifecycle outcomes.
 
 ## Static configuration captured by the decorator
 
@@ -227,6 +227,11 @@ extract effective kwargs
    v
 resolve context
    |
+   +--> context is None
+   |       |
+   |       v
+   |   call original operation without decorator-driven logging
+   |
    v
 resolve entity id
    |
@@ -240,9 +245,9 @@ check event policy
 optionally emit invoke
 ```
 
-This happens before the original operation body is executed.
-
 If setup fails, the operation body is not called.
+
+Returning None from get_log_context() is not a setup failure. It disables decorator-driven logging for the current call, and the original operation is still called.
 
 That is intentional. Setup failures indicate incorrect integration of the decorator, not failure of the decorated operation itself.
 
@@ -289,7 +294,9 @@ args[0] -> get_log_context() -> effective_ctx
 
 This is the method-based path, where `args[0]` is normally `self`.
 
-If neither path provides a context, setup fails.
+If `ctx` is not supplied and the first positional argument does not provide `LogContextProviderProto`, setup fails.
+
+If the method-based provider returns `None`, setup stops without failure and the original operation is called without decorator-driven logging.
 
 The context is required because the decorator delegates important work to it:
 
@@ -817,6 +824,8 @@ If already logged, it emits a suppressed failed outcome.
 
 ## Wrapper control flow
 
+The flows below describe calls where decorator-driven logging is enabled.
+
 The async wrapper has this control flow:
 
 ```text
@@ -907,7 +916,7 @@ It builds on the logger infrastructure instead of becoming part of the infrastru
 
 At decoration time, `log_invocation` validates and captures static configuration.
 
-At call time, the wrapper resolves the effective context, entity id, bound arguments, metadata, and event-policy decision.
+At call time, the wrapper resolves bound arguments and the effective context. When decorator-driven logging is enabled for the call, it also resolves entity id, metadata, and the event-policy decision.
 
 At outcome time, internal emitters build payloads, construct `LogEvent` records, and emit them through the resolved context.
 

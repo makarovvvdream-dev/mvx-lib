@@ -125,7 +125,7 @@ class LogContextProto(Protocol):
 
 @runtime_checkable
 class LogContextProviderProto(Protocol):
-    def get_log_context(self) -> LogContextProto:
+    def get_log_context(self) -> LogContextProto | None:
         """
         Return the logging context for this object.
 
@@ -133,7 +133,12 @@ class LogContextProviderProto(Protocol):
         resolution. For instance methods, the first positional argument is
         usually `self`, and this method supplies the effective context.
 
-        :return: logging context used by the decorated operation.
+        Returning ``None`` explicitly disables logging through `log_invocation`
+        for the current call. In that case, the decorated callable is executed
+        normally and no invocation lifecycle events are emitted.
+
+        :return: logging context used by the decorated operation, or ``None`` to
+            disable decorator-driven logging for the current call.
         """
         ...
 

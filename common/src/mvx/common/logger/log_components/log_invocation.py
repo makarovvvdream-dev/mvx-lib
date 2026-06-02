@@ -30,7 +30,7 @@ _SYSTEM_KEYS: frozenset[str] = frozenset({"error", "kwargs", "result", "cancelle
 _EVENT_RE = re.compile(r"^[A-Za-z_.]+$")
 
 
-def _resolve_context(args: tuple[Any, ...]) -> LogContextProto:
+def _resolve_context(args: tuple[Any, ...]) -> LogContextProto | None:
     first_arg = args[0] if args else None
     if isinstance(first_arg, LogContextProviderProto):
         return first_arg.get_log_context()
@@ -544,6 +544,11 @@ def log_invocation(
     the explicit ``ctx`` argument or resolves a context from the first positional
     argument through ``LogContextProviderProto``.
 
+    If the context provider returns ``None``, decorator-driven logging is disabled
+    for the current call. The decorated callable is executed normally and no
+    ``invoke``, ``success``, ``failed``, or ``cancelled`` lifecycle events are
+    emitted by this decorator.
+
     The original return value, exception, and cancellation semantics are preserved.
 
     :param event: event name for the decorated operation. Must match
@@ -567,14 +572,18 @@ def log_invocation(
     :param log_error_policy: rules controlling whether matching exception types
         produce a full or suppressed ``failed`` outcome.
     :param ctx: explicit logging context. If omitted, the decorator resolves the
-        context from the first positional argument.
+        context from the first positional argument. If that argument provides
+        ``LogContextProviderProto`` and returns ``None``, decorator-driven logging
+        is disabled for the current call.
     :param entity_id_getter: optional zero-argument callable used to provide
         ``LogEventMeta.entity_id``. If omitted, the decorator tries to resolve an
         identity from the first positional argument.
     :return: a decorator that wraps the target callable.
     :raises ValueError: if ``event`` has an invalid name.
-    :raises RuntimeError: if no logging context can be resolved when the decorated
-        callable is invoked.
+    :raises RuntimeError: if no explicit context is provided and no context
+        provider can be found on the first positional argument. A provider returning
+        ``None`` is treated as an explicit request to disable decorator-driven
+        logging, not as a resolution failure.
     """
 
     def decorate(func: F) -> F:
@@ -786,11 +795,14 @@ def log_invocation(
                 effective_kwargs = _extract_func_arguments(sig, args, kwargs)
 
                 effective_ctx = ctx if ctx is not None else _resolve_context(args)
+                if effective_ctx is None:
+                    return await func(*args, **kwargs)
+                logging_ctx: LogContextProto = effective_ctx
 
                 entity_id = entity_id_getter() if entity_id_getter else _resolve_entity_id(args)
 
                 event_meta = LogEventMeta(
-                    event_namespace=effective_ctx.namespace,
+                    event_namespace=logging_ctx.namespace,
                     event_name=event,
                     entity_id=entity_id,
                     source_path=None,
@@ -798,23 +810,23 @@ def log_invocation(
                     source_func=None,
                 )
 
-                event_enabled = effective_ctx.is_event_enabled(event_meta)
+                event_enabled = logging_ctx.is_event_enabled(event_meta)
 
                 if event_enabled:
-                    _emit_invoke(effective_ctx, event_meta, effective_kwargs)
+                    _emit_invoke(logging_ctx, event_meta, effective_kwargs)
 
                 try:
                     result = await func(*args, **kwargs)
 
                 except asyncio.CancelledError as err:
-                    _emit_cancelled(effective_ctx, event_meta, effective_kwargs, err)
+                    _emit_cancelled(logging_ctx, event_meta, effective_kwargs, err)
                     raise
                 except Exception as err:
-                    _emit_failed(effective_ctx, event_meta, effective_kwargs, err)
+                    _emit_failed(logging_ctx, event_meta, effective_kwargs, err)
                     raise
                 else:
                     if event_enabled:
-                        _emit_success(effective_ctx, event_meta, effective_kwargs, result)
+                        _emit_success(logging_ctx, event_meta, effective_kwargs, result)
                     return result
 
             # noinspection PyUnnecessaryCast
@@ -825,10 +837,14 @@ def log_invocation(
             effective_kwargs = _extract_func_arguments(sig, args, kwargs)
 
             effective_ctx = ctx if ctx is not None else _resolve_context(args)
+            if effective_ctx is None:
+                return func(*args, **kwargs)
+            logging_ctx: LogContextProto = effective_ctx
+
             entity_id = entity_id_getter() if entity_id_getter else _resolve_entity_id(args)
 
             event_meta = LogEventMeta(
-                event_namespace=effective_ctx.namespace,
+                event_namespace=logging_ctx.namespace,
                 event_name=event,
                 entity_id=entity_id,
                 source_path=None,
@@ -836,18 +852,18 @@ def log_invocation(
                 source_func=None,
             )
 
-            event_enabled = effective_ctx.is_event_enabled(event_meta)
+            event_enabled = logging_ctx.is_event_enabled(event_meta)
 
             if event_enabled:
-                _emit_invoke(effective_ctx, event_meta, effective_kwargs)
+                _emit_invoke(logging_ctx, event_meta, effective_kwargs)
 
             try:
                 result = func(*args, **kwargs)
             except asyncio.CancelledError as err:
-                _emit_cancelled(effective_ctx, event_meta, effective_kwargs, err)
+                _emit_cancelled(logging_ctx, event_meta, effective_kwargs, err)
                 raise
             except Exception as err:
-                _emit_failed(effective_ctx, event_meta, effective_kwargs, err)
+                _emit_failed(logging_ctx, event_meta, effective_kwargs, err)
                 raise
 
             if inspect.isawaitable(result):
@@ -856,20 +872,20 @@ def log_invocation(
                     try:
                         awaited = await cast(Awaitable[Any], result)
                     except asyncio.CancelledError as exc:
-                        _emit_cancelled(effective_ctx, event_meta, effective_kwargs, exc)
+                        _emit_cancelled(logging_ctx, event_meta, effective_kwargs, exc)
                         raise
                     except Exception as exc:
-                        _emit_failed(effective_ctx, event_meta, effective_kwargs, exc)
+                        _emit_failed(logging_ctx, event_meta, effective_kwargs, exc)
                         raise
                     else:
                         if event_enabled:
-                            _emit_success(effective_ctx, event_meta, effective_kwargs, awaited)
+                            _emit_success(logging_ctx, event_meta, effective_kwargs, awaited)
                         return awaited
 
                 return _await_and_log()
 
             if event_enabled:
-                _emit_success(effective_ctx, event_meta, effective_kwargs, result)
+                _emit_success(logging_ctx, event_meta, effective_kwargs, result)
             return result
 
         # noinspection PyUnnecessaryCast

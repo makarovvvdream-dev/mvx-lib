@@ -279,7 +279,7 @@ class Connection:
         self._log_context = log_context
         self.state = "closed"
 
-    def get_log_context(self) -> LogContextProto:
+    def get_log_context(self) -> LogContextProto | None:
         return self._log_context
 
     @log_invocation(
@@ -333,11 +333,13 @@ Some failures happen before the decorated operation body starts.
 Examples:
 
 ```text
-no context can be resolved
+ctx is not supplied and the first positional argument does not provide LogContextProviderProto
 get_log_context() raises
 entity_id_getter raises
 identity property access raises
 ```
+
+Returning `None` from `get_log_context()` is not a setup failure and is not logged as a `failed` outcome.
 
 These are decorator integration failures, not failures of the decorated operation.
 

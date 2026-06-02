@@ -110,10 +110,10 @@ class DisabledEventRecordingContext(RecordingContext):
 
 
 class ContextProvider:
-    def __init__(self, ctx: RecordingContext) -> None:
+    def __init__(self, ctx: RecordingContext | None) -> None:
         self.ctx = ctx
 
-    def get_log_context(self) -> LogContextProto:
+    def get_log_context(self) -> LogContextProto | None:
         return self.ctx
 
 
@@ -239,6 +239,12 @@ def test_a04_resolve_entity_id_from_first_argument_provider() -> None:
 def test_a05_resolve_entity_id_returns_none_without_provider() -> None:
     assert _resolve_entity_id((object(),)) is None
     assert _resolve_entity_id(()) is None
+
+
+def test_a06_resolve_context_returns_none_when_provider_returns_none() -> None:
+    provider = ContextProvider(None)
+
+    assert _resolve_context((provider,)) is None
 
 
 # B. Function argument extraction
@@ -1288,6 +1294,17 @@ def test_i20_log_invocation_sync_entity_id_getter_error_propagates_before_loggin
     assert ctx.events == []
 
 
+def test_i21_log_invocation_sync_provider_none_disables_decorator_logging() -> None:
+    owner = ContextProvider(None)
+
+    @log_invocation("op.disabled.by.context")
+    def target(self: ContextProvider, value: int) -> int:
+        _ = self
+        return value + 1
+
+    assert target(owner, 10) == 11
+
+
 # J. Sync function returning awaitable
 
 
@@ -1425,6 +1442,24 @@ async def test_j05_log_invocation_sync_returning_awaitable_event_disabled_still_
             "message": "stop",
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_j06_log_invocation_sync_returning_awaitable_provider_none_disables_logging() -> None:
+    owner = ContextProvider(None)
+
+    async def inner() -> str:
+        return "done"
+
+    @log_invocation("op.awaitable.disabled.by.context")
+    def target(self: ContextProvider) -> Awaitable[str]:
+        _ = self
+        return inner()
+
+    result = target(owner)
+
+    assert inspect.isawaitable(result)
+    assert await result == "done"
 
 
 # K. Async decorator path
@@ -1616,6 +1651,18 @@ async def test_k09_log_invocation_async_event_disabled_still_logs_cancelled() ->
             "message": "stop",
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_k10_log_invocation_async_provider_none_disables_decorator_logging() -> None:
+    owner = ContextProvider(None)
+
+    @log_invocation("op.async.disabled.by.context")
+    async def target(self: ContextProvider, value: int) -> int:
+        _ = self
+        return value + 1
+
+    assert await target(owner, 10) == 11
 
 
 # L. Metadata preservation

@@ -24,13 +24,15 @@ explicit ctx argument
 first positional argument with get_log_context()
 ```
 
-The same setup step also resolves `entity_id` for `LogEventMeta`.
+A method-based provider may also return `None`. This is an explicit per-call opt-out from decorator-driven logging.
+
+When a context is available, the same setup step also resolves `entity_id` for `LogEventMeta`.
 
 ## Resolution order
 
 When the decorated function is called, the wrapper prepares the logging frame before running the operation body.
 
-The order is:
+The logging-enabled order is:
 
 ```text
 extract bound function arguments
@@ -50,7 +52,9 @@ check event policy
 
 Context resolution happens before event policy is checked and before the `invoke` outcome can be emitted.
 
-If the decorator cannot resolve a context, the wrapped operation body is not called.
+If `ctx` is not supplied and the first positional argument does not provide `LogContextProviderProto`, the wrapped operation body is not called.
+
+If a method-based provider returns `None`, the logging-enabled setup stops there. The wrapped operation body is called normally, and the decorator emits no lifecycle events for that call.
 
 ## Explicit context
 
@@ -88,7 +92,7 @@ class Client:
     def __init__(self, log_context: LogContextProto) -> None:
         self._log_context = log_context
 
-    def get_log_context(self) -> LogContextProto:
+    def get_log_context(self) -> LogContextProto | None:
         return self._log_context
 
     @log_invocation("connect")
@@ -104,9 +108,15 @@ args[0] -> get_log_context() -> effective context
 
 The object does not need to inherit from a special base class. It only needs to satisfy the context-provider protocol structurally.
 
+`get_log_context()` may return either a context or `None`.
+
+Returning a context enables normal decorator-driven lifecycle logging.
+
+Returning `None` disables decorator-driven lifecycle logging for the current call. The operation still runs normally, but the decorator does not build metadata, does not check event policy, and does not emit lifecycle outcomes.
+
 ## Missing context
 
-If `ctx` is not supplied and the decorated function receives no first positional argument that provides a context, the decorator raises a runtime error.
+If `ctx` is not supplied and the decorated function receives no first positional argument that provides `LogContextProviderProto`, the decorator raises a runtime error.
 
 For example, this is not enough:
 
@@ -128,6 +138,35 @@ Use an explicit context instead:
 def load_config(path: str) -> dict[str, object]:
     return {"path": path}
 ```
+
+## Disabled method-based logging
+
+A method-based context provider may return `None`.
+
+This is not treated as a missing context. It is an explicit request to disable decorator-driven logging for the current call.
+
+```python
+from mvx.common.logger import LogContextProto, log_invocation
+
+
+class Client:
+    def __init__(self, log_context: LogContextProto | None) -> None:
+        self._log_context = log_context
+
+    def get_log_context(self) -> LogContextProto | None:
+        return self._log_context
+
+    @log_invocation("connect")
+    async def connect(self) -> None:
+        ...
+```
+
+If `get_log_context()` returns a context, `connect()` is logged normally.
+
+If `get_log_context()` returns `None`, `connect()` is executed normally, but the decorator emits no `invoke`, `success`, `failed`, or `cancelled` outcomes.
+
+In the disabled case, the decorator also does not resolve `entity_id`, does not build `LogEventMeta`, and does not call event policy.
+
 
 ## Factory functions and closures
 
@@ -219,7 +258,7 @@ class Client:
         self._log_context = log_context
         self._client_id = client_id
 
-    def get_log_context(self) -> LogContextProto:
+    def get_log_context(self) -> LogContextProto | None:
         return self._log_context
 
     @property
@@ -332,7 +371,7 @@ class Repository:
         self._log_context = log_context
         self._repo_id = repo_id
 
-    def get_log_context(self) -> LogContextProto:
+    def get_log_context(self) -> LogContextProto | None:
         return self._log_context
 
     @property
@@ -395,11 +434,13 @@ The wrapped operation body is not called if the decorator fails during setup.
 Setup can fail if:
 
 ```text
-no context can be resolved
+ctx is not supplied and the first positional argument does not provide LogContextProviderProto
 entity_id_getter raises
 get_log_context() raises
 identity property access raises
 ```
+
+Returning `None` from `get_log_context()` is not a setup failure.
 
 These failures happen before `LogEventMeta` is fully prepared and before the `invoke` outcome can be emitted.
 
@@ -414,6 +455,8 @@ This behavior is intentional. Setup failures usually indicate incorrect decorato
 Use explicit `ctx` for standalone functions and closure-based factories.
 
 Use `get_log_context()` on the first positional argument for public API methods.
+
+Return `None` from `get_log_context()` to run a call without decorator-driven logging.
 
 Use `entity_id_getter` or an `identity` property when the event should be attached to a stable runtime entity.
 

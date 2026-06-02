@@ -2,6 +2,8 @@
 
 This example shows how `log_invocation` handles a synchronous function that returns an awaitable.
 
+This example describes the logging-enabled path, where method-based context resolution returns a logging context.
+
 The function itself is not `async def`, but its result must still be awaited. In this case, the decorator emits `invoke` when the function is called and emits the final outcome only after the returned awaitable completes.
 
 ## Example
@@ -16,7 +18,7 @@ class Client:
     def __init__(self, log_context: LogContextProto) -> None:
         self._log_context = log_context
 
-    def get_log_context(self) -> LogContextProto:
+    def get_log_context(self) -> LogContextProto | None:
         return self._log_context
 
     @log_invocation(
