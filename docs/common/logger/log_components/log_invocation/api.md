@@ -63,8 +63,10 @@ The object must satisfy `LogContextProviderProto`:
 Conceptually:
 
 ```text
-self -> get_log_context() -> LogContextProto-compatible object
+self -> get_log_context() -> LogContextProto-compatible object | None
 ```
+
+If `get_log_context()` returns `None`, decorator-driven logging is disabled for the current call.
 
 If the decorator receives an explicit `ctx` argument, this protocol is not used for context resolution.
 

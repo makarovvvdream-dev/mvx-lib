@@ -170,7 +170,7 @@ class Connection:
         self.state = "closed"
         self.peer = "ldap.example.local"
 
-    def get_log_context(self) -> LogContextProto:
+    def get_log_context(self) -> LogContextProto | None:
         return self._log_context
 
     @log_invocation(

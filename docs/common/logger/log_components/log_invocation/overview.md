@@ -36,7 +36,7 @@ class LdapClient:
     def __init__(self, log_context: LogContextProto) -> None:
         self._log_context = log_context
 
-    def get_log_context(self) -> LogContextProto:
+    def get_log_context(self) -> LogContextProto | None:
         return self._log_context
 
     @log_invocation("bind")
@@ -215,7 +215,7 @@ class Client:
     def __init__(self, log_context: LogContextProto) -> None:
         self._log_context = log_context
 
-    def get_log_context(self) -> LogContextProto:
+    def get_log_context(self) -> LogContextProto | None:
         return self._log_context
 
     @log_invocation("connect")
@@ -241,7 +241,9 @@ def make_loader(log_context: LogContextProto):
 
 When `ctx` is passed explicitly, the decorator does not resolve the context from function arguments.
 
-If no explicit context is supplied and the first positional argument does not provide a logging context, the decorator raises a runtime error.
+If no explicit context is supplied and the first positional argument does not provide `LogContextProviderProto`, the decorator raises a runtime error.
+
+If the first positional argument provides `LogContextProviderProto` but `get_log_context()` returns `None`, decorator-driven logging is disabled for the current call. The decorated callable is executed normally, and no `invoke`, `success`, `failed`, or `cancelled` lifecycle events are emitted.
 
 ## Event name
 
@@ -390,7 +392,7 @@ class Client:
         self._log_context = log_context
         self._client_id = client_id
 
-    def get_log_context(self) -> LogContextProto:
+    def get_log_context(self) -> LogContextProto | None:
         return self._log_context
 
     @property
@@ -442,7 +444,7 @@ class Client:
     def __init__(self, log_context: LogContextProto) -> None:
         self._log_context = log_context
 
-    def get_log_context(self) -> LogContextProto:
+    def get_log_context(self) -> LogContextProto | None:
         return self._log_context
 
     @log_invocation(
@@ -500,7 +502,7 @@ class Connection:
         self._log_context = log_context
         self.state = "closed"
 
-    def get_log_context(self) -> LogContextProto:
+    def get_log_context(self) -> LogContextProto | None:
         return self._log_context
 
     @log_invocation(
@@ -648,7 +650,7 @@ class SessionService:
     def __init__(self, log_context: LogContextProto) -> None:
         self._log_context = log_context
 
-    def get_log_context(self) -> LogContextProto:
+    def get_log_context(self) -> LogContextProto | None:
         return self._log_context
 
     @log_invocation(
@@ -861,7 +863,7 @@ class LdapClient:
     def __init__(self, log_context: LogContextProto) -> None:
         self._log_context = log_context
 
-    def get_log_context(self) -> LogContextProto:
+    def get_log_context(self) -> LogContextProto | None:
         return self._log_context
 
     @property

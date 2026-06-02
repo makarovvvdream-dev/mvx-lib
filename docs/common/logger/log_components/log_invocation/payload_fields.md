@@ -116,7 +116,7 @@ class Client:
     def __init__(self, log_context: LogContextProto) -> None:
         self._log_context = log_context
 
-    def get_log_context(self) -> LogContextProto:
+    def get_log_context(self) -> LogContextProto | None:
         return self._log_context
 
     @log_invocation(
@@ -309,7 +309,7 @@ class Connection:
         self._log_context = log_context
         self.state = "closed"
 
-    def get_log_context(self) -> LogContextProto:
+    def get_log_context(self) -> LogContextProto | None:
         return self._log_context
 
     @log_invocation(
@@ -356,7 +356,7 @@ class Client:
     def __init__(self, log_context: LogContextProto) -> None:
         self._log_context = log_context
 
-    def get_log_context(self) -> LogContextProto:
+    def get_log_context(self) -> LogContextProto | None:
         return self._log_context
 
     @log_invocation(
@@ -429,7 +429,7 @@ class SessionService:
     def __init__(self, log_context: LogContextProto) -> None:
         self._log_context = log_context
 
-    def get_log_context(self) -> LogContextProto:
+    def get_log_context(self) -> LogContextProto | None:
         return self._log_context
 
     @log_invocation(

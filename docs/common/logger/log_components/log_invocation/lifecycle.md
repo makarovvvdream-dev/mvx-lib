@@ -32,6 +32,8 @@ The decorator does not create four different events. It creates log records for 
 
 ## Lifecycle shape
 
+The shapes below describe calls where a logging context has been resolved.
+
 The normal successful lifecycle is:
 
 ```text
@@ -130,6 +132,8 @@ args + kwargs -> inspect.Signature.bind(...) -> effective_kwargs
 ```
 
 Then it resolves the logging context. If `ctx` was passed to the decorator, that explicit context is used. Otherwise, the decorator expects the first positional argument to provide a context through `get_log_context()`.
+
+If `get_log_context()` returns `None`, decorator-driven lifecycle logging is disabled for the current call. The decorator does not resolve `entity_id`, does not build `LogEventMeta`, does not check event policy, and does not emit `invoke`, `success`, `failed`, or `cancelled` outcomes. The wrapped operation is executed normally.
 
 Then it resolves `entity_id`. If `entity_id_getter` was passed to the decorator, that getter is used. Otherwise, the decorator checks whether the first positional argument provides an `identity` property.
 
@@ -327,7 +331,7 @@ class Connection:
         self._log_context = log_context
         self.state = "closed"
 
-    def get_log_context(self) -> LogContextProto:
+    def get_log_context(self) -> LogContextProto | None:
         return self._log_context
 
     @log_invocation(

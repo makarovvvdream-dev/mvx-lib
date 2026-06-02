@@ -22,7 +22,7 @@ class Worker:
     def __init__(self, log_context: LogContextProto) -> None:
         self._log_context = log_context
 
-    def get_log_context(self) -> LogContextProto:
+    def get_log_context(self) -> LogContextProto | None:
         return self._log_context
 
     @log_invocation("run")

@@ -35,7 +35,7 @@ internal implementation may raise internal exceptions
 api_error_processor maps unexpected errors to public errors
    |
    v
-log_invocation records the public operation outcome
+log_invocation records the public operation outcome if the call has a logging context
    |
    v
 caller receives the declared public error shape
@@ -79,7 +79,7 @@ class Client:
     def __init__(self, log_context: LogContextProto) -> None:
         self._log_context = log_context
 
-    def get_log_context(self) -> LogContextProto:
+    def get_log_context(self) -> LogContextProto | None:
         return self._log_context
 ```
 
@@ -101,7 +101,7 @@ class Client:
     def __init__(self, log_context: LogContextProto) -> None:
         self._log_context = log_context
 
-    def get_log_context(self) -> LogContextProto:
+    def get_log_context(self) -> LogContextProto | None:
         return self._log_context
 
     @log_invocation("connect")
@@ -110,6 +110,10 @@ class Client:
 ```
 
 The decorator resolves the logging context through `get_log_context()`.
+
+If `get_log_context()` returns a context, `log_invocation` records lifecycle outcomes through that context.
+
+If `get_log_context()` returns `None`, the operation still runs normally, but `log_invocation` emits no lifecycle outcomes for that call.
 
 The application still controls:
 
@@ -167,7 +171,7 @@ class Client:
     def __init__(self, log_context: LogContextProto) -> None:
         self._log_context = log_context
 
-    def get_log_context(self) -> LogContextProto:
+    def get_log_context(self) -> LogContextProto | None:
         return self._log_context
 
     @log_invocation("connect")
@@ -417,7 +421,7 @@ class Client:
     def __init__(self, log_context: LogContextProto) -> None:
         self._log_context = log_context
 
-    def get_log_context(self) -> LogContextProto:
+    def get_log_context(self) -> LogContextProto | None:
         return self._log_context
 ```
 
@@ -429,11 +433,13 @@ The library emits through the provided context.
 
 A library may want logging to be optional.
 
-There are two clean ways to do that.
+There are three clean ways to do that.
 
 First, require the application to pass a context when logging is desired.
 
-Second, provide an explicit quiet or test context in application code.
+Second, return `None` from `get_log_context()` when a call should run without `log_invocation` lifecycle records.
+
+Third, provide an explicit quiet or test context in application code.
 
 Avoid hidden global setup just to make logging optional.
 
@@ -478,7 +484,7 @@ For public API methods, prefer a clear error boundary.
 
 `api_error_processor` defines which errors are part of the public API and which internal failures are mapped to a public unexpected-error type.
 
-`log_invocation` records the resulting operation outcome.
+If the call has a logging context, `log_invocation` records the resulting operation outcome.
 
 With the recommended decorator order, logger output and caller-visible errors describe the same public boundary.
 
@@ -524,7 +530,7 @@ When the public method also uses `api_error_processor`, test both boundaries:
 
 ```text
 unexpected internal exception is mapped to public unexpected error
-failed outcome logs the mapped public error
+failed outcome logs the mapped public error when a logging context is available
 original internal exception is preserved as cause
 ```
 

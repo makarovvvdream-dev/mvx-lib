@@ -12,7 +12,7 @@ class Connection:
         self._log_context = log_context
         self.state = "closed"
 
-    def get_log_context(self) -> LogContextProto:
+    def get_log_context(self) -> LogContextProto | None:
         return self._log_context
 
     @log_invocation(
