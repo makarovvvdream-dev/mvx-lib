@@ -18,6 +18,7 @@ Grouping rule:
   - Group m: start_tls()
   - Group n: SSL/TLS I/O error handling
   - Group o: logging integration
+  - Group p: metrics integration
 
 Naming rule:
   Each test name starts with test_<group><num>_, e.g. test_a1_...
@@ -25,7 +26,8 @@ Naming rule:
 
 from __future__ import annotations
 
-from typing import Any, Optional, cast, Literal
+from typing import Any, Optional, cast, Literal, Iterable
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import asyncio
@@ -44,6 +46,8 @@ from mvx.common.logger import (
     LogPayloadProcessor,
 )
 from mvx.networking.helpers import RemoteEndpoint
+from mvx.networking.metrics import Metric, MetricEvent
+
 from mvx.networking.engines.tcp_stream_engine.crypto_codec import CryptoCodec
 
 # noinspection PyProtectedMember
@@ -85,6 +89,42 @@ from mvx.networking.engines.tcp_stream_engine.errors import (
     TcpStreamEngineNotOpenError,
     TcpStreamEngineUnexpectedError,
     TcpStreamEngineUnexpectedlyClosingError,
+)
+
+
+from mvx.networking.engines.tcp_stream_engine.metrics import (
+    TcpStreamOpenAttemptsMetric,
+    TcpStreamOpenAttemptMetricEvent,
+    TcpStreamOpenAttemptOutcome,
+    TcpStreamCloseAttemptsMetric,
+    TcpStreamCloseAttemptMetricEvent,
+    TcpStreamCloseAttemptOutcome,
+    TcpStreamStartTlsAttemptsMetric,
+    TcpStreamStartTlsAttemptMetricEvent,
+    TcpStreamStartTlsAttemptOutcome,
+    TcpStreamCryptoCodecAttachAttemptsMetric,
+    TcpStreamCryptoCodecAttachAttemptMetricEvent,
+    TcpStreamCryptoCodecAttachAttemptOutcome,
+    TcpStreamCryptoCodecDetachAttemptsMetric,
+    TcpStreamCryptoCodecDetachAttemptMetricEvent,
+    TcpStreamCryptoCodecDetachAttemptOutcome,
+    TcpStreamStreamReadAttemptsMetric,
+    TcpStreamStreamReadAttemptMetricEvent,
+    TcpStreamStreamReadAttemptOutcome,
+    TcpStreamStreamWriteAttemptsMetric,
+    TcpStreamStreamWriteAttemptMetricEvent,
+    TcpStreamStreamWriteAttemptOutcome,
+    TcpStreamDrainAttemptsMetric,
+    TcpStreamDrainAttemptMetricEvent,
+    TcpStreamDrainAttemptOutcome,
+    TcpStreamBytesReceivedMetric,
+    TcpStreamBytesReceivedMetricEvent,
+    TcpStreamBytesSentMetric,
+    TcpStreamBytesSentMetricEvent,
+    TcpStreamRemoteDisconnectMetric,
+    TcpStreamRemoteDisconnectMetricEvent,
+    TcpStreamAbortiveCloseMetric,
+    TcpStreamAbortiveCloseMetricEvent,
 )
 
 # -------------------------
@@ -4475,3 +4515,1125 @@ async def test_o10_read_error_emits_abortive_close_internal_event(
     assert failed.meta.entity_id == "engine-log-10"
     assert failed.payload["engine_state"] == EngineState.CLOSED.value
     assert "error" in failed.payload
+
+
+# -------------------------
+# Group p: metrics integration
+# -------------------------
+
+
+class _MemoryMetricsRecorder:
+    def __init__(self) -> None:
+        self.metrics: list[Metric] = []
+        self.events: list[MetricEvent] = []
+
+    def register_metric(self, metric: Metric) -> None:
+        self.metrics.append(metric)
+
+    def register_event(self, event: MetricEvent) -> None:
+        self.events.append(event)
+
+    def get_metric_snapshots(self) -> Mapping[str, Mapping[str, Any]]:
+        return {metric.metric_name: metric.snapshot() for metric in self.metrics}
+
+    def iter_metrics(self) -> Iterable[Metric]:
+        return iter(self.metrics)
+
+
+class _FailingMetricsRecorder:
+    def register_metric(self, metric: Metric) -> None:
+        _ = self, metric
+        raise RuntimeError("metric registration failed")
+
+    def register_event(self, event: MetricEvent) -> None:
+        _ = self, event
+
+    def get_metric_snapshots(self) -> Mapping[str, Mapping[str, Any]]:
+        _ = self
+        return {}
+
+    def iter_metrics(self) -> Iterable[Metric]:
+        _ = self
+        return iter(())
+
+
+def _last_metric_event(recorder: _MemoryMetricsRecorder) -> MetricEvent:
+    assert recorder.events
+    return recorder.events[-1]
+
+
+def _metric_events_of_type(
+    recorder: _MemoryMetricsRecorder,
+    event_type: type[MetricEvent],
+) -> list[MetricEvent]:
+    return [event for event in recorder.events if isinstance(event, event_type)]
+
+
+def _single_metric_event_of_type(
+    recorder: _MemoryMetricsRecorder,
+    event_type: type[MetricEvent],
+) -> MetricEvent:
+    events = _metric_events_of_type(recorder, event_type)
+
+    assert len(events) == 1
+
+    return events[0]
+
+
+def test_p1_ctor_registers_standard_tcp_stream_metrics(
+    remote_endpoint: _FakeRemoteEndpoint,
+):
+    """Constructor registers standard TcpStreamEngine metrics."""
+    recorder = _MemoryMetricsRecorder()
+
+    _ = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=cast(Any, recorder),
+    )
+
+    assert [metric.metric_name for metric in recorder.metrics] == [
+        "tcp_stream.open.attempts",
+        "tcp_stream.close.attempts",
+        "tcp_stream.start_tls.attempts",
+        "tcp_stream.crypto_codec.attach.attempts",
+        "tcp_stream.crypto_codec.detach.attempts",
+        "tcp_stream.stream_read.attempts",
+        "tcp_stream.stream_write.attempts",
+        "tcp_stream.drain.attempts",
+        "tcp_stream.bytes.received",
+        "tcp_stream.bytes.sent",
+        "tcp_stream.remote_disconnect",
+        "tcp_stream.abortive_close",
+    ]
+
+    assert recorder.events == []
+
+
+def test_p2_ctor_registers_expected_metric_instances(
+    remote_endpoint: _FakeRemoteEndpoint,
+):
+    """Constructor registers concrete standard metric objects."""
+    recorder = _MemoryMetricsRecorder()
+
+    _ = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=cast(Any, recorder),
+    )
+
+    assert len(recorder.metrics) == 12
+
+    assert isinstance(recorder.metrics[0], TcpStreamOpenAttemptsMetric)
+    assert isinstance(recorder.metrics[1], TcpStreamCloseAttemptsMetric)
+    assert isinstance(recorder.metrics[2], TcpStreamStartTlsAttemptsMetric)
+    assert isinstance(recorder.metrics[3], TcpStreamCryptoCodecAttachAttemptsMetric)
+    assert isinstance(recorder.metrics[4], TcpStreamCryptoCodecDetachAttemptsMetric)
+    assert isinstance(recorder.metrics[5], TcpStreamStreamReadAttemptsMetric)
+    assert isinstance(recorder.metrics[6], TcpStreamStreamWriteAttemptsMetric)
+    assert isinstance(recorder.metrics[7], TcpStreamDrainAttemptsMetric)
+    assert isinstance(recorder.metrics[8], TcpStreamBytesReceivedMetric)
+    assert isinstance(recorder.metrics[9], TcpStreamBytesSentMetric)
+    assert isinstance(recorder.metrics[10], TcpStreamRemoteDisconnectMetric)
+    assert isinstance(recorder.metrics[11], TcpStreamAbortiveCloseMetric)
+
+
+def test_p3_ctor_without_metrics_recorder_does_not_register_metrics(
+    remote_endpoint: _FakeRemoteEndpoint,
+):
+    """Constructor works without metrics recorder."""
+    eng = TcpStreamEngine(remote_endpoint=cast(Any, remote_endpoint))
+
+    assert eng.state is EngineState.VIRGIN
+
+
+def test_p4_ctor_rejects_invalid_metrics_recorder(
+    remote_endpoint: _FakeRemoteEndpoint,
+):
+    """Constructor rejects object that does not implement MetricsRecorderProto."""
+    with pytest.raises(TypeError, match="metrics_recorder"):
+        _ = TcpStreamEngine(
+            remote_endpoint=cast(Any, remote_endpoint),
+            metrics_recorder=cast(Any, object()),
+        )
+
+
+def test_p5_metric_registration_failure_does_not_break_constructor(
+    remote_endpoint: _FakeRemoteEndpoint,
+):
+    """Custom recorder registration failure does not break engine construction."""
+    recorder = _FailingMetricsRecorder()
+
+    eng = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=cast(Any, recorder),
+    )
+
+    assert eng.state is EngineState.VIRGIN
+
+
+@pytest.mark.asyncio
+async def test_p6_open_success_emits_open_success_metric_event(
+    remote_endpoint: _FakeRemoteEndpoint,
+    module_under_test,
+    monkeypatch,
+):
+    recorder = _MemoryMetricsRecorder()
+    remote_endpoint.set_candidates([_ai_inet("192.0.2.10", 389)])
+
+    eng = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=cast(Any, recorder),
+    )
+
+    async def stub_open_socket(info: Any, cand: Any, *, use_ssl: bool) -> Any:
+        _ = info, cand, use_ssl
+        return _FakeStreamReader(), _FakeStreamWriter()
+
+    monkeypatch.setattr(
+        module_under_test.TcpStreamEngine,
+        "_open_socket",
+        staticmethod(stub_open_socket),
+    )
+
+    result = await eng.open(use_ssl=True)
+
+    event = _last_metric_event(recorder)
+
+    assert result is TcpStreamOpenOutcome.OPENED
+    assert isinstance(event, TcpStreamOpenAttemptMetricEvent)
+    assert event.event_type == "tcp_stream.open.attempt"
+    assert event.use_ssl is True
+    assert event.outcome is TcpStreamOpenAttemptOutcome.SUCCESS
+
+
+@pytest.mark.asyncio
+async def test_p7_open_already_opened_emits_open_already_opened_metric_event(
+    remote_endpoint: _FakeRemoteEndpoint,
+    module_under_test,
+    monkeypatch,
+):
+    recorder = _MemoryMetricsRecorder()
+    remote_endpoint.set_candidates([_ai_inet("192.0.2.10", 389)])
+
+    eng = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=cast(Any, recorder),
+    )
+
+    async def stub_open_socket(info: Any, cand: Any, *, use_ssl: bool) -> Any:
+        _ = info, cand, use_ssl
+        return _FakeStreamReader(), _FakeStreamWriter()
+
+    monkeypatch.setattr(
+        module_under_test.TcpStreamEngine,
+        "_open_socket",
+        staticmethod(stub_open_socket),
+    )
+
+    first = await eng.open()
+    second = await eng.open()
+
+    assert first is TcpStreamOpenOutcome.OPENED
+    assert second is TcpStreamOpenOutcome.ALREADY_OPENED
+
+    assert len(recorder.events) == 2
+
+    event = recorder.events[-1]
+    assert isinstance(event, TcpStreamOpenAttemptMetricEvent)
+    assert event.outcome is TcpStreamOpenAttemptOutcome.ALREADY_OPENED
+
+
+@pytest.mark.asyncio
+async def test_p8_open_failure_emits_open_failure_metric_event(
+    remote_endpoint: _FakeRemoteEndpoint,
+):
+    recorder = _MemoryMetricsRecorder()
+    remote_endpoint.set_exception(RuntimeError("boom"))
+
+    eng = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=cast(Any, recorder),
+    )
+
+    with pytest.raises(TcpStreamEngineUnexpectedError):
+        await eng.open()
+
+    event = _last_metric_event(recorder)
+
+    assert isinstance(event, TcpStreamOpenAttemptMetricEvent)
+    assert event.outcome is TcpStreamOpenAttemptOutcome.FAILURE
+
+
+@pytest.mark.asyncio
+async def test_p9_close_success_emits_close_success_metric_event(
+    remote_endpoint: _FakeRemoteEndpoint,
+):
+    recorder = _MemoryMetricsRecorder()
+
+    eng = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=cast(Any, recorder),
+    )
+    eng._state = EngineState.OPENED
+    eng._reader = cast(Any, _FakeStreamReader())
+    eng._writer = cast(Any, _FakeStreamWriter())
+
+    result = await eng.close()
+
+    event = _last_metric_event(recorder)
+
+    assert result is TcpStreamCloseOutcome.CLOSED
+    assert isinstance(event, TcpStreamCloseAttemptMetricEvent)
+    assert event.event_type == "tcp_stream.close.attempt"
+    assert event.outcome is TcpStreamCloseAttemptOutcome.SUCCESS
+
+
+@pytest.mark.asyncio
+async def test_p10_close_not_opened_emits_close_not_opened_metric_event(
+    remote_endpoint: _FakeRemoteEndpoint,
+):
+    recorder = _MemoryMetricsRecorder()
+
+    eng = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=cast(Any, recorder),
+    )
+
+    result = await eng.close()
+
+    event = _last_metric_event(recorder)
+
+    assert result is TcpStreamCloseOutcome.NOT_OPENED
+    assert isinstance(event, TcpStreamCloseAttemptMetricEvent)
+    assert event.outcome is TcpStreamCloseAttemptOutcome.NOT_OPENED
+
+
+@pytest.mark.asyncio
+async def test_p11_start_tls_success_emits_start_tls_success_metric_event(
+    remote_endpoint: _FakeRemoteEndpoint,
+    module_under_test,
+    monkeypatch,
+):
+    recorder = _MemoryMetricsRecorder()
+
+    eng = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=cast(Any, recorder),
+    )
+    eng._state = EngineState.OPENED
+    eng._reader = cast(Any, _FakeStreamReader())
+    eng._writer = cast(Any, _FakeStreamWriter())
+    eng._security_mode = TcpStreamSecurityMode.PLAIN
+
+    async def fake_wrap_stream_tls(
+        info: Any,
+        writer: Any,
+        *,
+        handshake_timeout_s: float | None = None,
+    ) -> None:
+        _ = info, writer, handshake_timeout_s
+
+    async def fake_run_with_cancellation_policy(
+        factory: Any,
+        *,
+        policy: Any,
+    ) -> tuple[bool, Any]:
+        _ = policy
+        _result = await factory()
+        return False, _result
+
+    monkeypatch.setattr(module_under_test, "wrap_stream_tls", fake_wrap_stream_tls)
+    monkeypatch.setattr(
+        module_under_test,
+        "run_with_cancellation_policy",
+        fake_run_with_cancellation_policy,
+    )
+
+    result = await eng.start_tls()
+
+    event = _last_metric_event(recorder)
+
+    assert result is TcpStreamReconfigOutcome.DONE
+    assert isinstance(event, TcpStreamStartTlsAttemptMetricEvent)
+    assert event.event_type == "tcp_stream.start_tls.attempt"
+    assert event.outcome is TcpStreamStartTlsAttemptOutcome.SUCCESS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("security_mode", "result", "outcome"),
+    [
+        (
+            TcpStreamSecurityMode.SSL,
+            TcpStreamReconfigOutcome.REFUSED_CONNECTION_ALREADY_UNDER_SSL,
+            TcpStreamStartTlsAttemptOutcome.REFUSED_ALREADY_UNDER_SSL,
+        ),
+        (
+            TcpStreamSecurityMode.START_TLS,
+            TcpStreamReconfigOutcome.REFUSED_START_TLS_ALREADY_ACTIVE,
+            TcpStreamStartTlsAttemptOutcome.REFUSED_START_TLS_ALREADY_ACTIVE,
+        ),
+        (
+            TcpStreamSecurityMode.CODEC,
+            TcpStreamReconfigOutcome.REFUSED_CRYPTO_CODEC_ATTACHED,
+            TcpStreamStartTlsAttemptOutcome.REFUSED_CRYPTO_CODEC_ATTACHED,
+        ),
+    ],
+)
+async def test_p12_start_tls_refused_by_security_mode_emits_metric_event(
+    remote_endpoint: _FakeRemoteEndpoint,
+    security_mode: TcpStreamSecurityMode,
+    result: TcpStreamReconfigOutcome,
+    outcome: TcpStreamStartTlsAttemptOutcome,
+):
+    recorder = _MemoryMetricsRecorder()
+
+    eng = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=cast(Any, recorder),
+    )
+    eng._state = EngineState.OPENED
+    eng._reader = cast(Any, _FakeStreamReader())
+    eng._writer = cast(Any, _FakeStreamWriter())
+    eng._security_mode = security_mode
+
+    actual_result = await eng.start_tls()
+
+    event = _last_metric_event(recorder)
+
+    assert actual_result is result
+    assert isinstance(event, TcpStreamStartTlsAttemptMetricEvent)
+    assert event.outcome is outcome
+
+
+@pytest.mark.asyncio
+async def test_p13_start_tls_refused_not_opened_emits_metric_event(
+    remote_endpoint: _FakeRemoteEndpoint,
+):
+    recorder = _MemoryMetricsRecorder()
+
+    eng = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=cast(Any, recorder),
+    )
+
+    result = await eng.start_tls()
+
+    event = _last_metric_event(recorder)
+
+    assert result is TcpStreamReconfigOutcome.REFUSED_CONNECTION_NOT_OPENED
+    assert isinstance(event, TcpStreamStartTlsAttemptMetricEvent)
+    assert event.outcome is TcpStreamStartTlsAttemptOutcome.REFUSED_NOT_OPENED
+
+
+@pytest.mark.asyncio
+async def test_p14_attach_success_emits_attach_success_metric_event(
+    remote_endpoint: _FakeRemoteEndpoint,
+):
+    recorder = _MemoryMetricsRecorder()
+
+    eng = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=cast(Any, recorder),
+    )
+    eng._state = EngineState.OPENED
+    eng._reader = cast(Any, _FakeStreamReader())
+    eng._writer = cast(Any, _FakeStreamWriter())
+    eng._security_mode = TcpStreamSecurityMode.PLAIN
+
+    result = await eng.attach_crypto_codec(cast(Any, _FakeCryptoCodec()))
+
+    event = _last_metric_event(recorder)
+
+    assert result is TcpStreamReconfigOutcome.DONE
+    assert isinstance(event, TcpStreamCryptoCodecAttachAttemptMetricEvent)
+    assert event.event_type == "tcp_stream.crypto_codec.attach.attempt"
+    assert event.outcome is TcpStreamCryptoCodecAttachAttemptOutcome.SUCCESS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("state", "security_mode", "has_codec", "result", "outcome"),
+    [
+        (
+            EngineState.VIRGIN,
+            TcpStreamSecurityMode.NOT_AVAILABLE,
+            False,
+            TcpStreamReconfigOutcome.REFUSED_CONNECTION_NOT_OPENED,
+            TcpStreamCryptoCodecAttachAttemptOutcome.REFUSED_NOT_OPENED,
+        ),
+        (
+            EngineState.OPENED,
+            TcpStreamSecurityMode.SSL,
+            False,
+            TcpStreamReconfigOutcome.REFUSED_CONNECTION_ALREADY_UNDER_SSL,
+            TcpStreamCryptoCodecAttachAttemptOutcome.REFUSED_ALREADY_UNDER_SSL,
+        ),
+        (
+            EngineState.OPENED,
+            TcpStreamSecurityMode.START_TLS,
+            False,
+            TcpStreamReconfigOutcome.REFUSED_START_TLS_ALREADY_ACTIVE,
+            TcpStreamCryptoCodecAttachAttemptOutcome.REFUSED_START_TLS_ACTIVE,
+        ),
+        (
+            EngineState.OPENED,
+            TcpStreamSecurityMode.PLAIN,
+            True,
+            TcpStreamReconfigOutcome.REFUSED_CRYPTO_CODEC_ATTACHED,
+            TcpStreamCryptoCodecAttachAttemptOutcome.REFUSED_ALREADY_ATTACHED,
+        ),
+    ],
+)
+async def test_p15_attach_refused_emits_attach_refused_metric_event(
+    remote_endpoint: _FakeRemoteEndpoint,
+    state: EngineState,
+    security_mode: TcpStreamSecurityMode,
+    has_codec: bool,
+    result: TcpStreamReconfigOutcome,
+    outcome: TcpStreamCryptoCodecAttachAttemptOutcome,
+):
+    recorder = _MemoryMetricsRecorder()
+
+    eng = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=cast(Any, recorder),
+    )
+    eng._state = state
+    eng._security_mode = security_mode
+
+    if state is EngineState.OPENED:
+        eng._reader = cast(Any, _FakeStreamReader())
+        eng._writer = cast(Any, _FakeStreamWriter())
+
+    if has_codec:
+        eng._crypto_codec = cast(Any, _FakeCryptoCodec())
+
+    actual_result = await eng.attach_crypto_codec(cast(Any, _FakeCryptoCodec()))
+
+    event = _last_metric_event(recorder)
+
+    assert actual_result is result
+    assert isinstance(event, TcpStreamCryptoCodecAttachAttemptMetricEvent)
+    assert event.outcome is outcome
+
+
+@pytest.mark.asyncio
+async def test_p16_detach_success_emits_detach_success_metric_event(
+    remote_endpoint: _FakeRemoteEndpoint,
+):
+    recorder = _MemoryMetricsRecorder()
+
+    eng = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=cast(Any, recorder),
+    )
+    eng._state = EngineState.OPENED
+    eng._reader = cast(Any, _FakeStreamReader())
+    eng._writer = cast(Any, _FakeStreamWriter())
+    eng._crypto_codec = cast(Any, _FakeCryptoCodec())
+    eng._security_mode = TcpStreamSecurityMode.CODEC
+
+    result = await eng.detach_crypto_codec()
+
+    event = _last_metric_event(recorder)
+
+    assert result is TcpStreamReconfigOutcome.DONE
+    assert isinstance(event, TcpStreamCryptoCodecDetachAttemptMetricEvent)
+    assert event.event_type == "tcp_stream.crypto_codec.detach.attempt"
+    assert event.outcome is TcpStreamCryptoCodecDetachAttemptOutcome.SUCCESS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("state", "has_codec", "result", "outcome"),
+    [
+        (
+            EngineState.VIRGIN,
+            True,
+            TcpStreamReconfigOutcome.REFUSED_CONNECTION_NOT_OPENED,
+            TcpStreamCryptoCodecDetachAttemptOutcome.REFUSED_NOT_OPENED,
+        ),
+        (
+            EngineState.OPENED,
+            False,
+            TcpStreamReconfigOutcome.REFUSED_CRYPTO_CODEC_NOT_ATTACHED,
+            TcpStreamCryptoCodecDetachAttemptOutcome.REFUSED_NOT_ATTACHED,
+        ),
+    ],
+)
+async def test_p17_detach_refused_emits_detach_refused_metric_event(
+    remote_endpoint: _FakeRemoteEndpoint,
+    state: EngineState,
+    has_codec: bool,
+    result: TcpStreamReconfigOutcome,
+    outcome: TcpStreamCryptoCodecDetachAttemptOutcome,
+):
+    recorder = _MemoryMetricsRecorder()
+
+    eng = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=cast(Any, recorder),
+    )
+    eng._state = state
+
+    if state is EngineState.OPENED:
+        eng._reader = cast(Any, _FakeStreamReader())
+        eng._writer = cast(Any, _FakeStreamWriter())
+
+    if has_codec:
+        eng._crypto_codec = cast(Any, _FakeCryptoCodec())
+
+    actual_result = await eng.detach_crypto_codec()
+
+    event = _last_metric_event(recorder)
+
+    assert actual_result is result
+    assert isinstance(event, TcpStreamCryptoCodecDetachAttemptMetricEvent)
+    assert event.outcome is outcome
+
+
+@pytest.mark.asyncio
+async def test_p18_read_success_emits_stream_read_success_and_bytes_received_events(
+    remote_endpoint: _FakeRemoteEndpoint,
+):
+    recorder = _MemoryMetricsRecorder()
+
+    eng = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=cast(Any, recorder),
+    )
+    eng._state = EngineState.OPENED
+
+    reader = _FakeStreamReader()
+    reader.set_next(b"hello")
+    eng._reader = cast(Any, reader)
+    eng._writer = cast(Any, _FakeStreamWriter())
+
+    # noinspection PyArgumentEqualDefault
+    result = await eng.read(5, mode=SocketTimeoutMode.UNLIMITED)
+
+    stream_read_event = _single_metric_event_of_type(
+        recorder,
+        TcpStreamStreamReadAttemptMetricEvent,
+    )
+    bytes_received_event = _single_metric_event_of_type(
+        recorder,
+        TcpStreamBytesReceivedMetricEvent,
+    )
+
+    assert result == b"hello"
+
+    assert isinstance(stream_read_event, TcpStreamStreamReadAttemptMetricEvent)
+    assert stream_read_event.event_type == "tcp_stream.stream_read.attempt"
+    assert stream_read_event.outcome is TcpStreamStreamReadAttemptOutcome.SUCCESS
+
+    assert isinstance(bytes_received_event, TcpStreamBytesReceivedMetricEvent)
+    assert bytes_received_event.event_type == "tcp_stream.bytes.received"
+    assert bytes_received_event.size == 5
+
+
+@pytest.mark.asyncio
+async def test_p19_read_timeout_emits_stream_read_timeout_metric_event(
+    remote_endpoint: _FakeRemoteEndpoint,
+    module_under_test,
+    monkeypatch,
+):
+    recorder = _MemoryMetricsRecorder()
+
+    eng = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=cast(Any, recorder),
+    )
+    eng._state = EngineState.OPENED
+    eng._reader = cast(Any, _FakeStreamReader())
+    eng._writer = cast(Any, _FakeStreamWriter())
+
+    async def fake_wait_for(awaitable: Any, timeout: float) -> Any:
+        _ = timeout
+        if hasattr(awaitable, "close"):
+            awaitable.close()
+        raise asyncio.TimeoutError()
+
+    monkeypatch.setattr(module_under_test.asyncio, "wait_for", fake_wait_for)
+
+    with pytest.raises(SocketTimeoutError):
+        await eng.read(
+            10,
+            mode=SocketTimeoutMode.LIMITED,
+            socket_timeout_s=1.0,
+        )
+
+    event = _single_metric_event_of_type(
+        recorder,
+        TcpStreamStreamReadAttemptMetricEvent,
+    )
+
+    assert isinstance(event, TcpStreamStreamReadAttemptMetricEvent)
+    assert event.outcome is TcpStreamStreamReadAttemptOutcome.TIMEOUT
+    assert _metric_events_of_type(recorder, TcpStreamBytesReceivedMetricEvent) == []
+
+
+@pytest.mark.asyncio
+async def test_p20_read_cancelled_emits_stream_read_cancelled_metric_event(
+    remote_endpoint: _FakeRemoteEndpoint,
+):
+    recorder = _MemoryMetricsRecorder()
+
+    eng = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=cast(Any, recorder),
+    )
+    eng._state = EngineState.OPENED
+
+    gate = asyncio.Event()
+    reader = _FakeStreamReader()
+    reader.set_gate(gate)
+    eng._reader = cast(Any, reader)
+    eng._writer = cast(Any, _FakeStreamWriter())
+
+    # noinspection PyArgumentEqualDefault
+    task = asyncio.create_task(eng.read(1, mode=SocketTimeoutMode.UNLIMITED))
+    await asyncio.sleep(0)
+
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    event = _single_metric_event_of_type(
+        recorder,
+        TcpStreamStreamReadAttemptMetricEvent,
+    )
+
+    assert isinstance(event, TcpStreamStreamReadAttemptMetricEvent)
+    assert event.outcome is TcpStreamStreamReadAttemptOutcome.CANCELLED
+
+
+@pytest.mark.asyncio
+async def test_p21_read_io_error_emits_stream_read_error_and_abortive_close_events(
+    remote_endpoint: _FakeRemoteEndpoint,
+):
+    recorder = _MemoryMetricsRecorder()
+
+    eng = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=cast(Any, recorder),
+    )
+    eng._state = EngineState.OPENED
+
+    reader = _FakeStreamReader()
+    reader.set_exc(ConnectionResetError("reset"))
+    eng._reader = cast(Any, reader)
+    eng._writer = cast(Any, _FakeStreamWriter())
+
+    with pytest.raises(TcpStreamIoError):
+        # noinspection PyArgumentEqualDefault
+        await eng.read(1, mode=SocketTimeoutMode.UNLIMITED)
+
+    stream_read_event = _single_metric_event_of_type(
+        recorder,
+        TcpStreamStreamReadAttemptMetricEvent,
+    )
+    abortive_close_event = _single_metric_event_of_type(
+        recorder,
+        TcpStreamAbortiveCloseMetricEvent,
+    )
+
+    assert isinstance(stream_read_event, TcpStreamStreamReadAttemptMetricEvent)
+    assert stream_read_event.outcome is TcpStreamStreamReadAttemptOutcome.ERROR
+
+    assert isinstance(abortive_close_event, TcpStreamAbortiveCloseMetricEvent)
+    assert abortive_close_event.event_type == "tcp_stream.abortive_close"
+
+
+@pytest.mark.asyncio
+async def test_p22_read_tls_error_emits_stream_read_tls_error_and_abortive_close_events(
+    remote_endpoint: _FakeRemoteEndpoint,
+):
+    recorder = _MemoryMetricsRecorder()
+
+    eng = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=cast(Any, recorder),
+    )
+    eng._state = EngineState.OPENED
+    eng._security_mode = TcpStreamSecurityMode.START_TLS
+
+    reader = _FakeStreamReader()
+    reader.set_exc(ssl.SSLError("ssl-read-failed"))
+    eng._reader = cast(Any, reader)
+    eng._writer = cast(Any, _FakeStreamWriter())
+
+    with pytest.raises(TlsError):
+        # noinspection PyArgumentEqualDefault
+        await eng.read(1, mode=SocketTimeoutMode.UNLIMITED)
+
+    stream_read_event = _single_metric_event_of_type(
+        recorder,
+        TcpStreamStreamReadAttemptMetricEvent,
+    )
+    abortive_close_event = _single_metric_event_of_type(
+        recorder,
+        TcpStreamAbortiveCloseMetricEvent,
+    )
+
+    assert isinstance(stream_read_event, TcpStreamStreamReadAttemptMetricEvent)
+    assert stream_read_event.outcome is TcpStreamStreamReadAttemptOutcome.TLS_ERROR
+
+    assert isinstance(abortive_close_event, TcpStreamAbortiveCloseMetricEvent)
+    assert abortive_close_event.event_type == "tcp_stream.abortive_close"
+
+
+@pytest.mark.asyncio
+async def test_p23_read_eof_emits_remote_disconnect_and_abortive_close_events(
+    remote_endpoint: _FakeRemoteEndpoint,
+):
+    recorder = _MemoryMetricsRecorder()
+
+    eng = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=cast(Any, recorder),
+    )
+    eng._state = EngineState.OPENED
+
+    reader = _FakeStreamReader()
+    reader.set_next(b"")
+    eng._reader = cast(Any, reader)
+    eng._writer = cast(Any, _FakeStreamWriter())
+
+    with pytest.raises(TcpStreamRemotelyDisconnectedError):
+        # noinspection PyArgumentEqualDefault
+        await eng.read(1024, mode=SocketTimeoutMode.UNLIMITED)
+
+    remote_disconnect_event = _single_metric_event_of_type(
+        recorder,
+        TcpStreamRemoteDisconnectMetricEvent,
+    )
+    abortive_close_event = _single_metric_event_of_type(
+        recorder,
+        TcpStreamAbortiveCloseMetricEvent,
+    )
+
+    assert isinstance(remote_disconnect_event, TcpStreamRemoteDisconnectMetricEvent)
+    assert remote_disconnect_event.event_type == "tcp_stream.remote_disconnect"
+
+    assert isinstance(abortive_close_event, TcpStreamAbortiveCloseMetricEvent)
+    assert abortive_close_event.event_type == "tcp_stream.abortive_close"
+
+    assert _metric_events_of_type(recorder, TcpStreamStreamReadAttemptMetricEvent) == []
+    assert _metric_events_of_type(recorder, TcpStreamBytesReceivedMetricEvent) == []
+
+
+def test_p24_write_success_emits_stream_write_success_and_bytes_sent_events(
+    remote_endpoint: _FakeRemoteEndpoint,
+):
+    recorder = _MemoryMetricsRecorder()
+
+    eng = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=cast(Any, recorder),
+    )
+    eng._state = EngineState.OPENED
+    eng._reader = cast(Any, _FakeStreamReader())
+    eng._writer = cast(Any, _FakeStreamWriter())
+
+    eng.write(b"abc")
+
+    stream_write_event = _single_metric_event_of_type(
+        recorder,
+        TcpStreamStreamWriteAttemptMetricEvent,
+    )
+    bytes_sent_event = _single_metric_event_of_type(
+        recorder,
+        TcpStreamBytesSentMetricEvent,
+    )
+
+    assert isinstance(stream_write_event, TcpStreamStreamWriteAttemptMetricEvent)
+    assert stream_write_event.event_type == "tcp_stream.stream_write.attempt"
+    assert stream_write_event.outcome is TcpStreamStreamWriteAttemptOutcome.SUCCESS
+
+    assert isinstance(bytes_sent_event, TcpStreamBytesSentMetricEvent)
+    assert bytes_sent_event.event_type == "tcp_stream.bytes.sent"
+    assert bytes_sent_event.size == 3
+
+
+def test_p25_write_io_error_emits_stream_write_error_metric_event(
+    remote_endpoint: _FakeRemoteEndpoint,
+):
+    recorder = _MemoryMetricsRecorder()
+
+    eng = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=cast(Any, recorder),
+    )
+    eng._state = EngineState.OPENED
+    eng._reader = cast(Any, _FakeStreamReader())
+
+    writer = _FakeStreamWriter()
+    writer.set_write_exc(BrokenPipeError("pipe"))
+    eng._writer = cast(Any, writer)
+
+    with pytest.raises(TcpStreamIoError):
+        eng.write(b"abc")
+
+    event = _single_metric_event_of_type(
+        recorder,
+        TcpStreamStreamWriteAttemptMetricEvent,
+    )
+
+    assert isinstance(event, TcpStreamStreamWriteAttemptMetricEvent)
+    assert event.outcome is TcpStreamStreamWriteAttemptOutcome.ERROR
+    assert _metric_events_of_type(recorder, TcpStreamBytesSentMetricEvent) == []
+
+
+def test_p26_write_tls_error_emits_stream_write_tls_error_metric_event(
+    remote_endpoint: _FakeRemoteEndpoint,
+):
+    recorder = _MemoryMetricsRecorder()
+
+    eng = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=cast(Any, recorder),
+    )
+    eng._state = EngineState.OPENED
+    eng._reader = cast(Any, _FakeStreamReader())
+
+    writer = _FakeStreamWriter()
+    writer.set_write_exc(ssl.SSLError("ssl-write-failed"))
+    eng._writer = cast(Any, writer)
+
+    with pytest.raises(TlsError):
+        eng.write(b"abc")
+
+    event = _single_metric_event_of_type(
+        recorder,
+        TcpStreamStreamWriteAttemptMetricEvent,
+    )
+
+    assert isinstance(event, TcpStreamStreamWriteAttemptMetricEvent)
+    assert event.outcome is TcpStreamStreamWriteAttemptOutcome.TLS_ERROR
+    assert _metric_events_of_type(recorder, TcpStreamBytesSentMetricEvent) == []
+
+
+@pytest.mark.asyncio
+async def test_p27_drain_success_emits_drain_success_metric_event(
+    remote_endpoint: _FakeRemoteEndpoint,
+):
+    recorder = _MemoryMetricsRecorder()
+
+    eng = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=cast(Any, recorder),
+    )
+    eng._state = EngineState.OPENED
+    eng._reader = cast(Any, _FakeStreamReader())
+    eng._writer = cast(Any, _FakeStreamWriter())
+
+    # noinspection PyArgumentEqualDefault
+    await eng.drain(mode=SocketTimeoutMode.UNLIMITED)
+
+    event = _single_metric_event_of_type(
+        recorder,
+        TcpStreamDrainAttemptMetricEvent,
+    )
+
+    assert isinstance(event, TcpStreamDrainAttemptMetricEvent)
+    assert event.event_type == "tcp_stream.drain.attempt"
+    assert event.outcome is TcpStreamDrainAttemptOutcome.SUCCESS
+
+
+@pytest.mark.asyncio
+async def test_p28_drain_timeout_emits_drain_timeout_metric_event(
+    remote_endpoint: _FakeRemoteEndpoint,
+    module_under_test,
+    monkeypatch,
+):
+    recorder = _MemoryMetricsRecorder()
+
+    eng = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=cast(Any, recorder),
+    )
+    eng._state = EngineState.OPENED
+    eng._reader = cast(Any, _FakeStreamReader())
+    eng._writer = cast(Any, _FakeStreamWriter())
+
+    async def fake_wait_for(awaitable: Any, timeout: float) -> Any:
+        _ = timeout
+        if hasattr(awaitable, "close"):
+            awaitable.close()
+        raise asyncio.TimeoutError()
+
+    monkeypatch.setattr(module_under_test.asyncio, "wait_for", fake_wait_for)
+
+    with pytest.raises(SocketTimeoutError):
+        await eng.drain(
+            mode=SocketTimeoutMode.LIMITED,
+            socket_timeout_s=1.0,
+        )
+
+    event = _single_metric_event_of_type(
+        recorder,
+        TcpStreamDrainAttemptMetricEvent,
+    )
+
+    assert isinstance(event, TcpStreamDrainAttemptMetricEvent)
+    assert event.outcome is TcpStreamDrainAttemptOutcome.TIMEOUT
+
+
+@pytest.mark.asyncio
+async def test_p29_drain_cancelled_emits_drain_cancelled_metric_event(
+    remote_endpoint: _FakeRemoteEndpoint,
+):
+    recorder = _MemoryMetricsRecorder()
+
+    eng = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=cast(Any, recorder),
+    )
+    eng._state = EngineState.OPENED
+    eng._reader = cast(Any, _FakeStreamReader())
+
+    writer = _FakeStreamWriter()
+    gate = asyncio.Event()
+    writer.set_drain_gate(gate)
+    eng._writer = cast(Any, writer)
+
+    # noinspection PyArgumentEqualDefault
+    task = asyncio.create_task(eng.drain(mode=SocketTimeoutMode.UNLIMITED))
+    await asyncio.sleep(0)
+
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    event = _single_metric_event_of_type(
+        recorder,
+        TcpStreamDrainAttemptMetricEvent,
+    )
+
+    assert isinstance(event, TcpStreamDrainAttemptMetricEvent)
+    assert event.outcome is TcpStreamDrainAttemptOutcome.CANCELLED
+
+
+@pytest.mark.asyncio
+async def test_p30_drain_io_error_emits_drain_error_and_abortive_close_events(
+    remote_endpoint: _FakeRemoteEndpoint,
+):
+    recorder = _MemoryMetricsRecorder()
+
+    eng = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=cast(Any, recorder),
+    )
+    eng._state = EngineState.OPENED
+    eng._reader = cast(Any, _FakeStreamReader())
+
+    writer = _FakeStreamWriter()
+    writer.set_drain_exc(OSError(errno.EPIPE, "pipe"))
+    eng._writer = cast(Any, writer)
+
+    with pytest.raises(TcpStreamIoError):
+        # noinspection PyArgumentEqualDefault
+        await eng.drain(mode=SocketTimeoutMode.UNLIMITED)
+
+    drain_event = _single_metric_event_of_type(
+        recorder,
+        TcpStreamDrainAttemptMetricEvent,
+    )
+    abortive_close_event = _single_metric_event_of_type(
+        recorder,
+        TcpStreamAbortiveCloseMetricEvent,
+    )
+
+    assert isinstance(drain_event, TcpStreamDrainAttemptMetricEvent)
+    assert drain_event.outcome is TcpStreamDrainAttemptOutcome.ERROR
+
+    assert isinstance(abortive_close_event, TcpStreamAbortiveCloseMetricEvent)
+    assert abortive_close_event.event_type == "tcp_stream.abortive_close"
+
+
+@pytest.mark.asyncio
+async def test_p31_drain_tls_error_emits_drain_tls_error_and_abortive_close_events(
+    remote_endpoint: _FakeRemoteEndpoint,
+):
+    recorder = _MemoryMetricsRecorder()
+
+    eng = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=cast(Any, recorder),
+    )
+    eng._state = EngineState.OPENED
+    eng._reader = cast(Any, _FakeStreamReader())
+
+    writer = _FakeStreamWriter()
+    writer.set_drain_exc(ssl.SSLError("ssl-drain-failed"))
+    eng._writer = cast(Any, writer)
+
+    with pytest.raises(TlsError):
+        # noinspection PyArgumentEqualDefault
+        await eng.drain(mode=SocketTimeoutMode.UNLIMITED)
+
+    drain_event = _single_metric_event_of_type(
+        recorder,
+        TcpStreamDrainAttemptMetricEvent,
+    )
+    abortive_close_event = _single_metric_event_of_type(
+        recorder,
+        TcpStreamAbortiveCloseMetricEvent,
+    )
+
+    assert isinstance(drain_event, TcpStreamDrainAttemptMetricEvent)
+    assert drain_event.outcome is TcpStreamDrainAttemptOutcome.TLS_ERROR
+
+    assert isinstance(abortive_close_event, TcpStreamAbortiveCloseMetricEvent)
+    assert abortive_close_event.event_type == "tcp_stream.abortive_close"
+
+
+class _FailingEventMetricsRecorder:
+    def __init__(self) -> None:
+        self.metrics: list[Metric] = []
+
+    def register_metric(self, metric: Metric) -> None:
+        self.metrics.append(metric)
+
+    def register_event(self, event: MetricEvent) -> None:
+        _ = self, event
+        raise RuntimeError("metric event failed")
+
+    def get_metric_snapshots(self) -> Mapping[str, Mapping[str, Any]]:
+        return {metric.metric_name: metric.snapshot() for metric in self.metrics}
+
+    def iter_metrics(self) -> Iterable[Metric]:
+        return iter(self.metrics)
+
+
+@pytest.mark.asyncio
+async def test_p100_metric_event_failure_does_not_break_open_success(
+    remote_endpoint: _FakeRemoteEndpoint,
+    module_under_test,
+    monkeypatch,
+):
+    recorder = _FailingEventMetricsRecorder()
+    remote_endpoint.set_candidates([_ai_inet("192.0.2.10", 389)])
+
+    eng = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=cast(Any, recorder),
+    )
+
+    async def stub_open_socket(info: Any, cand: Any, *, use_ssl: bool) -> Any:
+        _ = info, cand, use_ssl
+        return _FakeStreamReader(), _FakeStreamWriter()
+
+    monkeypatch.setattr(
+        module_under_test.TcpStreamEngine,
+        "_open_socket",
+        staticmethod(stub_open_socket),
+    )
+
+    result = await eng.open()
+
+    assert result is TcpStreamOpenOutcome.OPENED
+    assert eng.state is EngineState.OPENED

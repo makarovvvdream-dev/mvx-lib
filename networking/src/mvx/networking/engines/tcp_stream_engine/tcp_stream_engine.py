@@ -818,6 +818,43 @@ from .errors import (
 
 from .crypto_codec import CryptoCodec
 
+from .metrics import (
+    TcpStreamOpenAttemptsMetric,
+    TcpStreamOpenAttemptMetricEvent,
+    TcpStreamOpenAttemptOutcome,
+    TcpStreamCloseAttemptsMetric,
+    TcpStreamCloseAttemptMetricEvent,
+    TcpStreamCloseAttemptOutcome,
+    TcpStreamStartTlsAttemptsMetric,
+    TcpStreamStartTlsAttemptMetricEvent,
+    TcpStreamStartTlsAttemptOutcome,
+    TcpStreamCryptoCodecAttachAttemptsMetric,
+    TcpStreamCryptoCodecAttachAttemptMetricEvent,
+    TcpStreamCryptoCodecAttachAttemptOutcome,
+    TcpStreamCryptoCodecDetachAttemptsMetric,
+    TcpStreamCryptoCodecDetachAttemptMetricEvent,
+    TcpStreamCryptoCodecDetachAttemptOutcome,
+    TcpStreamStreamReadAttemptOutcome,
+    TcpStreamStreamReadAttemptMetricEvent,
+    TcpStreamStreamReadAttemptsMetric,
+    TcpStreamStreamWriteAttemptOutcome,
+    TcpStreamStreamWriteAttemptMetricEvent,
+    TcpStreamStreamWriteAttemptsMetric,
+    TcpStreamDrainAttemptOutcome,
+    TcpStreamDrainAttemptMetricEvent,
+    TcpStreamDrainAttemptsMetric,
+    TcpStreamBytesReceivedMetricEvent,
+    TcpStreamBytesReceivedMetric,
+    TcpStreamBytesSentMetricEvent,
+    TcpStreamBytesSentMetric,
+    TcpStreamRemoteDisconnectMetricEvent,
+    TcpStreamRemoteDisconnectMetric,
+    TcpStreamAbortiveCloseMetricEvent,
+    TcpStreamAbortiveCloseMetric,
+    MetricEvent,
+    MetricsRecorderProto,
+)
+
 __all__ = (
     "TcpStreamEngine",
     "TcpStreamOpenOutcome",
@@ -1096,6 +1133,7 @@ class TcpStreamEngine:
         *,
         remote_endpoint: RemoteEndpoint,
         log_context: LogContext | None = None,
+        metrics_recorder: MetricsRecorderProto | None = None,
         entity_id: str | None = None,
     ) -> None:
 
@@ -1111,6 +1149,11 @@ class TcpStreamEngine:
                 raise TypeError(
                     "argument 'log_context' must be an instance of 'LogContext' when provided"
                 )
+        if metrics_recorder is not None:
+            if not isinstance(metrics_recorder, MetricsRecorderProto):
+                raise TypeError(
+                    "argument 'metrics_recorder' must implement MetricsRecorderProto when provided"
+                )
 
         if entity_id is not None:
             if not isinstance(entity_id, str):
@@ -1121,6 +1164,8 @@ class TcpStreamEngine:
         self._id = _id or uuid4().hex[:8]
 
         self._log_context = log_context
+
+        self._metrics_recorder = metrics_recorder
 
         # Connection info
         self._remote_endpoint = remote_endpoint
@@ -1147,6 +1192,9 @@ class TcpStreamEngine:
         self._security_mode: TcpStreamSecurityMode = TcpStreamSecurityMode.NOT_AVAILABLE
         self._crypto_codec: CryptoCodec | None = None
 
+        # Metrics
+        self._register_metrics()
+
     # ---- Logging infrastructure ----------------------------------------------------------
 
     def get_log_context(self) -> LogContextProto | None:
@@ -1159,6 +1207,44 @@ class TcpStreamEngine:
     @property
     def identity(self) -> str:
         return self._id
+
+    # ---- Metrics infrastructure ----------------------------------------------------------
+
+    def _register_metrics(self) -> None:
+        if self._metrics_recorder is None:
+            return
+
+        metrics = (
+            TcpStreamOpenAttemptsMetric(),
+            TcpStreamCloseAttemptsMetric(),
+            TcpStreamStartTlsAttemptsMetric(),
+            TcpStreamCryptoCodecAttachAttemptsMetric(),
+            TcpStreamCryptoCodecDetachAttemptsMetric(),
+            TcpStreamStreamReadAttemptsMetric(),
+            TcpStreamStreamWriteAttemptsMetric(),
+            TcpStreamDrainAttemptsMetric(),
+            TcpStreamBytesReceivedMetric(),
+            TcpStreamBytesSentMetric(),
+            TcpStreamRemoteDisconnectMetric(),
+            TcpStreamAbortiveCloseMetric(),
+        )
+
+        for metric in metrics:
+            # noinspection PyBroadException
+            try:
+                self._metrics_recorder.register_metric(metric=metric)
+            except Exception:
+                pass
+
+    def _send_metric_event(self, event: MetricEvent) -> None:
+        if self._metrics_recorder is None:
+            return
+
+        # noinspection PyBroadException
+        try:
+            self._metrics_recorder.register_event(event=event)
+        except Exception:
+            pass
 
     # ---- Public API ----------------------------------------------------------------------
 
@@ -1277,9 +1363,17 @@ class TcpStreamEngine:
             into TcpStreamEngineUnexpectedError by @error_processor.
         """
 
+        def _send_open_metric_event(outcome: TcpStreamOpenAttemptOutcome) -> None:
+            metric_event = TcpStreamOpenAttemptMetricEvent(
+                use_ssl=use_ssl,
+                outcome=outcome,
+            )
+            self._send_metric_event(event=metric_event)
+
         if not isinstance(use_ssl, bool):
             raise TypeError("argument 'use_ssl' must be bool when provided")
 
+        already_opened = False
         async with self._cond:
             # Wait for transitional states to finish
             while self._state in (
@@ -1290,10 +1384,14 @@ class TcpStreamEngine:
                 await self._cond.wait()
 
             if self._state is EngineState.OPENED:
-                return TcpStreamOpenOutcome.ALREADY_OPENED
+                already_opened = True
+            else:
+                # Allow (re)open from VIRGIN/CLOSED/ERROR
+                self._state = EngineState.OPENING
 
-            # Allow (re)open from VIRGIN/CLOSED/ERROR
-            self._state = EngineState.OPENING
+        if already_opened:
+            _send_open_metric_event(TcpStreamOpenAttemptOutcome.ALREADY_OPENED)
+            return TcpStreamOpenOutcome.ALREADY_OPENED
 
         try:
 
@@ -1324,7 +1422,10 @@ class TcpStreamEngine:
                             )
                             self._state = EngineState.OPENED
                             self._cond.notify_all()
+
+                        _send_open_metric_event(TcpStreamOpenAttemptOutcome.SUCCESS)
                         return TcpStreamOpenOutcome.OPENED
+
                     except asyncio.CancelledError:
                         writer.close()
                         # noinspection PyBroadException
@@ -1340,6 +1441,14 @@ class TcpStreamEngine:
                 reason=OpenConnectionErrorReason.CONNECTION_TO_HOST_FAILURE,
                 socket_error_list=causes,
             )
+
+        except asyncio.CancelledError:
+            _send_open_metric_event(TcpStreamOpenAttemptOutcome.CANCELLED)
+            raise
+
+        except Exception:
+            _send_open_metric_event(TcpStreamOpenAttemptOutcome.FAILURE)
+            raise
 
         finally:
             # Ensure we never get stuck in OPENING (including on cancellation).
@@ -1415,7 +1524,28 @@ class TcpStreamEngine:
             Any unexpected exception escaping this method is wrapped into
             TcpStreamEngineUnexpectedError by @error_processor.
         """
-        return await self._close_core()
+        try:
+            result = await self._close_core()
+            if result is TcpStreamCloseOutcome.CLOSED:
+                self._send_metric_event(
+                    TcpStreamCloseAttemptMetricEvent(TcpStreamCloseAttemptOutcome.SUCCESS)
+                )
+            elif result is TcpStreamCloseOutcome.NOT_OPENED:
+                self._send_metric_event(
+                    TcpStreamCloseAttemptMetricEvent(TcpStreamCloseAttemptOutcome.NOT_OPENED)
+                )
+
+            return result
+        except asyncio.CancelledError:
+            self._send_metric_event(
+                TcpStreamCloseAttemptMetricEvent(TcpStreamCloseAttemptOutcome.CANCELLED)
+            )
+            raise
+        except Exception:
+            self._send_metric_event(
+                TcpStreamCloseAttemptMetricEvent(TcpStreamCloseAttemptOutcome.FAILURE)
+            )
+            raise
 
     @log_invocation(
         event="tcp_stream_engine.start_tls",
@@ -1442,6 +1572,9 @@ class TcpStreamEngine:
             if handshake_timeout_s <= 0:
                 raise ValueError("argument 'handshake_timeout_s' must be positive when provided")
 
+        metric_event: TcpStreamStartTlsAttemptMetricEvent
+        refusal_reason: TcpStreamReconfigOutcome | None = None
+
         async with self._cond:
             while self._state in (
                 EngineState.OPENING,
@@ -1451,22 +1584,39 @@ class TcpStreamEngine:
                 await self._cond.wait()
 
             if self._state is not EngineState.OPENED:
-                return TcpStreamReconfigOutcome.REFUSED_CONNECTION_NOT_OPENED
+                refusal_reason = TcpStreamReconfigOutcome.REFUSED_CONNECTION_NOT_OPENED
+                metric_event = TcpStreamStartTlsAttemptMetricEvent(
+                    TcpStreamStartTlsAttemptOutcome.REFUSED_NOT_OPENED
+                )
+            else:
+                security_mode = self._security_mode
 
-            security_mode = self._security_mode
+                if security_mode is TcpStreamSecurityMode.SSL:
+                    refusal_reason = TcpStreamReconfigOutcome.REFUSED_CONNECTION_ALREADY_UNDER_SSL
+                    metric_event = TcpStreamStartTlsAttemptMetricEvent(
+                        TcpStreamStartTlsAttemptOutcome.REFUSED_ALREADY_UNDER_SSL
+                    )
 
-            if security_mode is TcpStreamSecurityMode.SSL:
-                return TcpStreamReconfigOutcome.REFUSED_CONNECTION_ALREADY_UNDER_SSL
+                elif security_mode is TcpStreamSecurityMode.START_TLS:
+                    refusal_reason = TcpStreamReconfigOutcome.REFUSED_START_TLS_ALREADY_ACTIVE
+                    metric_event = TcpStreamStartTlsAttemptMetricEvent(
+                        TcpStreamStartTlsAttemptOutcome.REFUSED_START_TLS_ALREADY_ACTIVE
+                    )
 
-            if security_mode is TcpStreamSecurityMode.START_TLS:
-                return TcpStreamReconfigOutcome.REFUSED_START_TLS_ALREADY_ACTIVE
+                elif security_mode is TcpStreamSecurityMode.CODEC:
+                    refusal_reason = TcpStreamReconfigOutcome.REFUSED_CRYPTO_CODEC_ATTACHED
+                    metric_event = TcpStreamStartTlsAttemptMetricEvent(
+                        TcpStreamStartTlsAttemptOutcome.REFUSED_CRYPTO_CODEC_ATTACHED
+                    )
 
-            if security_mode is TcpStreamSecurityMode.CODEC:
-                return TcpStreamReconfigOutcome.REFUSED_CRYPTO_CODEC_ATTACHED
+                else:
+                    writer = self._writer
+                    self._state = EngineState.RECONFIGURING
+                    self._cond.notify_all()
 
-            writer = self._writer
-            self._state = EngineState.RECONFIGURING
-            self._cond.notify_all()
+        if refusal_reason is not None:
+            self._send_metric_event(metric_event)
+            return refusal_reason
 
         tls_started = False
         assert writer is not None, "TcpStreamEngine.start_tls: writer unexpectedly None"
@@ -1486,7 +1636,21 @@ class TcpStreamEngine:
             if cancelled:
                 raise asyncio.CancelledError
 
+        except asyncio.CancelledError:
+            self._send_metric_event(
+                TcpStreamStartTlsAttemptMetricEvent(TcpStreamStartTlsAttemptOutcome.CANCELLED)
+            )
+            raise
+
         except NetError as exc:
+            if isinstance(exc, SocketTimeoutError):
+                outcome = TcpStreamStartTlsAttemptOutcome.TIMEOUT
+            elif isinstance(exc, TlsError):
+                outcome = TcpStreamStartTlsAttemptOutcome.TLS_ERROR
+            else:
+                outcome = TcpStreamStartTlsAttemptOutcome.FAILURE
+
+            self._send_metric_event(TcpStreamStartTlsAttemptMetricEvent(outcome))
             await self._close_core(exc=exc, allow_when_reconfiguring=True)
             raise
 
@@ -1498,6 +1662,9 @@ class TcpStreamEngine:
                         self._state = EngineState.OPENED
                     self._cond.notify_all()
 
+        self._send_metric_event(
+            TcpStreamStartTlsAttemptMetricEvent(TcpStreamStartTlsAttemptOutcome.SUCCESS)
+        )
         return TcpStreamReconfigOutcome.DONE
 
     @log_invocation(
@@ -1561,31 +1728,61 @@ class TcpStreamEngine:
         if not isinstance(codec, CryptoCodec):
             raise TypeError("argument 'codec' must be an instance of 'CryptoCodec'")
 
-        async with self._cond:
-            while self._state in (
-                EngineState.OPENING,
-                EngineState.CLOSING,
-                EngineState.RECONFIGURING,
-            ):
-                await self._cond.wait()
+        metric_event: TcpStreamCryptoCodecAttachAttemptMetricEvent
+        result: TcpStreamReconfigOutcome
 
-            if self._state is not EngineState.OPENED:
-                return TcpStreamReconfigOutcome.REFUSED_CONNECTION_NOT_OPENED
+        try:
+            async with self._cond:
+                while self._state in (
+                    EngineState.OPENING,
+                    EngineState.CLOSING,
+                    EngineState.RECONFIGURING,
+                ):
+                    await self._cond.wait()
 
-            if self._security_mode is TcpStreamSecurityMode.SSL:
-                return TcpStreamReconfigOutcome.REFUSED_CONNECTION_ALREADY_UNDER_SSL
+                if self._state is not EngineState.OPENED:
+                    result = TcpStreamReconfigOutcome.REFUSED_CONNECTION_NOT_OPENED
+                    metric_event = TcpStreamCryptoCodecAttachAttemptMetricEvent(
+                        TcpStreamCryptoCodecAttachAttemptOutcome.REFUSED_NOT_OPENED
+                    )
 
-            if self._security_mode is TcpStreamSecurityMode.START_TLS:
-                return TcpStreamReconfigOutcome.REFUSED_START_TLS_ALREADY_ACTIVE
+                elif self._security_mode is TcpStreamSecurityMode.SSL:
+                    result = TcpStreamReconfigOutcome.REFUSED_CONNECTION_ALREADY_UNDER_SSL
+                    metric_event = TcpStreamCryptoCodecAttachAttemptMetricEvent(
+                        TcpStreamCryptoCodecAttachAttemptOutcome.REFUSED_ALREADY_UNDER_SSL
+                    )
 
-            if self._crypto_codec is not None:
-                return TcpStreamReconfigOutcome.REFUSED_CRYPTO_CODEC_ATTACHED
+                elif self._security_mode is TcpStreamSecurityMode.START_TLS:
+                    result = TcpStreamReconfigOutcome.REFUSED_START_TLS_ALREADY_ACTIVE
+                    metric_event = TcpStreamCryptoCodecAttachAttemptMetricEvent(
+                        TcpStreamCryptoCodecAttachAttemptOutcome.REFUSED_START_TLS_ACTIVE
+                    )
 
-            self._crypto_codec = codec
+                elif self._crypto_codec is not None:
+                    result = TcpStreamReconfigOutcome.REFUSED_CRYPTO_CODEC_ATTACHED
+                    metric_event = TcpStreamCryptoCodecAttachAttemptMetricEvent(
+                        TcpStreamCryptoCodecAttachAttemptOutcome.REFUSED_ALREADY_ATTACHED
+                    )
 
-            self._security_mode = TcpStreamSecurityMode.CODEC
+                else:
+                    self._crypto_codec = codec
+                    self._security_mode = TcpStreamSecurityMode.CODEC
 
-            return TcpStreamReconfigOutcome.DONE
+                    result = TcpStreamReconfigOutcome.DONE
+                    metric_event = TcpStreamCryptoCodecAttachAttemptMetricEvent(
+                        TcpStreamCryptoCodecAttachAttemptOutcome.SUCCESS
+                    )
+
+            self._send_metric_event(metric_event)
+            return result
+
+        except Exception:
+            self._send_metric_event(
+                TcpStreamCryptoCodecAttachAttemptMetricEvent(
+                    TcpStreamCryptoCodecAttachAttemptOutcome.FAILURE
+                )
+            )
+            raise
 
     @log_invocation(
         event="tcp_stream_engine.detach_crypto_codec",
@@ -1639,20 +1836,46 @@ class TcpStreamEngine:
         - Any protocol-specific coordination required before detaching the codec
           must be handled by the caller.
         """
-        async with self._cond:
-            while self._state in (EngineState.OPENING, EngineState.RECONFIGURING):
-                await self._cond.wait()
 
-            if self._state is not EngineState.OPENED:
-                return TcpStreamReconfigOutcome.REFUSED_CONNECTION_NOT_OPENED
+        metric_event: TcpStreamCryptoCodecDetachAttemptMetricEvent
+        result: TcpStreamReconfigOutcome
 
-            if self._crypto_codec is None:
-                return TcpStreamReconfigOutcome.REFUSED_CRYPTO_CODEC_NOT_ATTACHED
+        try:
+            async with self._cond:
+                while self._state in (EngineState.OPENING, EngineState.RECONFIGURING):
+                    await self._cond.wait()
 
-            self._crypto_codec = None
-            self._security_mode = TcpStreamSecurityMode.PLAIN
+                if self._state is not EngineState.OPENED:
+                    result = TcpStreamReconfigOutcome.REFUSED_CONNECTION_NOT_OPENED
+                    metric_event = TcpStreamCryptoCodecDetachAttemptMetricEvent(
+                        TcpStreamCryptoCodecDetachAttemptOutcome.REFUSED_NOT_OPENED
+                    )
 
-            return TcpStreamReconfigOutcome.DONE
+                elif self._crypto_codec is None:
+                    result = TcpStreamReconfigOutcome.REFUSED_CRYPTO_CODEC_NOT_ATTACHED
+                    metric_event = TcpStreamCryptoCodecDetachAttemptMetricEvent(
+                        TcpStreamCryptoCodecDetachAttemptOutcome.REFUSED_NOT_ATTACHED
+                    )
+
+                else:
+                    self._crypto_codec = None
+                    self._security_mode = TcpStreamSecurityMode.PLAIN
+
+                    result = TcpStreamReconfigOutcome.DONE
+                    metric_event = TcpStreamCryptoCodecDetachAttemptMetricEvent(
+                        TcpStreamCryptoCodecDetachAttemptOutcome.SUCCESS
+                    )
+
+            self._send_metric_event(metric_event)
+            return result
+
+        except Exception:
+            self._send_metric_event(
+                TcpStreamCryptoCodecDetachAttemptMetricEvent(
+                    TcpStreamCryptoCodecDetachAttemptOutcome.FAILURE
+                )
+            )
+            raise
 
     @log_invocation(
         event="tcp_stream_engine.read",
@@ -1993,15 +2216,31 @@ class TcpStreamEngine:
             else:  # mode == SocketTimeoutMode.UNLIMITED:
                 await writer.drain()
 
+            self._send_metric_event(
+                TcpStreamDrainAttemptMetricEvent(TcpStreamDrainAttemptOutcome.SUCCESS)
+            )
+
         except asyncio.TimeoutError:
+            self._send_metric_event(
+                TcpStreamDrainAttemptMetricEvent(TcpStreamDrainAttemptOutcome.TIMEOUT)
+            )
+
             raise SocketTimeoutError(
                 io_op_type=TCP_DRAIN,
                 engine_state=self._state,
                 socket_timeout_mode=mode,
                 socket_timeout_s=socket_timeout_s,
             )
+        except asyncio.CancelledError:
+            self._send_metric_event(
+                TcpStreamDrainAttemptMetricEvent(TcpStreamDrainAttemptOutcome.CANCELLED)
+            )
+            raise
 
         except ssl.SSLError as e:
+            self._send_metric_event(
+                TcpStreamDrainAttemptMetricEvent(TcpStreamDrainAttemptOutcome.TLS_ERROR)
+            )
             reason_ssl = _map_ssl_exception_to_reason(e)
             state_before = self._state
             exc_ssl = TlsError(
@@ -2016,6 +2255,9 @@ class TcpStreamEngine:
             raise exc_ssl from e
 
         except Exception as e:
+            self._send_metric_event(
+                TcpStreamDrainAttemptMetricEvent(TcpStreamDrainAttemptOutcome.ERROR)
+            )
             reason_io = _map_io_exception_to_reason(e)
             state_before = self._state
             exc_io = TcpStreamIoError(
@@ -2121,8 +2363,11 @@ class TcpStreamEngine:
                 data = await asyncio.wait_for(reader.read(n), timeout=socket_timeout_s)
             else:  # mode == SocketTimeoutMode.UNLIMITED:
                 data = await reader.read(n)
-        except asyncio.TimeoutError:
 
+        except asyncio.TimeoutError:
+            self._send_metric_event(
+                TcpStreamStreamReadAttemptMetricEvent(TcpStreamStreamReadAttemptOutcome.TIMEOUT)
+            )
             raise SocketTimeoutError(
                 io_op_type=TCP_READ,
                 engine_state=self._state,
@@ -2131,6 +2376,9 @@ class TcpStreamEngine:
             ).with_detail("read_max_bytes", n)
 
         except asyncio.CancelledError as cancel_exc:
+            self._send_metric_event(
+                TcpStreamStreamReadAttemptMetricEvent(TcpStreamStreamReadAttemptOutcome.CANCELLED)
+            )
             log_context = self.get_log_context()
             if log_context is not None:
                 # prevent logging cancellation error as it is a normal pathway
@@ -2138,6 +2386,9 @@ class TcpStreamEngine:
             raise
 
         except ssl.SSLError as e:
+            self._send_metric_event(
+                TcpStreamStreamReadAttemptMetricEvent(TcpStreamStreamReadAttemptOutcome.TLS_ERROR)
+            )
             reason_ssl = _map_ssl_exception_to_reason(e)
             state_before = self._state
             exc = TlsError(
@@ -2152,6 +2403,9 @@ class TcpStreamEngine:
             raise exc from e
 
         except Exception as e:
+            self._send_metric_event(
+                TcpStreamStreamReadAttemptMetricEvent(TcpStreamStreamReadAttemptOutcome.ERROR)
+            )
             reason_io = _map_io_exception_to_reason(e)
             state_before = self._state
             exc = TcpStreamIoError(
@@ -2164,6 +2418,7 @@ class TcpStreamEngine:
             raise exc from e
 
         if data == b"":
+            self._send_metric_event(TcpStreamRemoteDisconnectMetricEvent())
             state_before = self._state
             exc = TcpStreamRemotelyDisconnectedError(
                 engine_state=state_before,
@@ -2171,6 +2426,10 @@ class TcpStreamEngine:
             await self._close_core(exc=exc)
             raise exc
 
+        self._send_metric_event(
+            TcpStreamStreamReadAttemptMetricEvent(TcpStreamStreamReadAttemptOutcome.SUCCESS)
+        )
+        self._send_metric_event(TcpStreamBytesReceivedMetricEvent(size=len(data)))
         return data
 
     def _write_raw(self, data: bytes) -> None:
@@ -2246,8 +2505,15 @@ class TcpStreamEngine:
 
         try:
             writer.write(data)
+            self._send_metric_event(
+                TcpStreamStreamWriteAttemptMetricEvent(TcpStreamStreamWriteAttemptOutcome.SUCCESS)
+            )
+            self._send_metric_event(TcpStreamBytesSentMetricEvent(size=len(data)))
 
         except ssl.SSLError as e:
+            self._send_metric_event(
+                TcpStreamStreamWriteAttemptMetricEvent(TcpStreamStreamWriteAttemptOutcome.TLS_ERROR)
+            )
             reason_ssl = _map_ssl_exception_to_reason(e)
             raise TlsError(
                 reason=reason_ssl,
@@ -2259,6 +2525,9 @@ class TcpStreamEngine:
             ) from e
 
         except Exception as e:
+            self._send_metric_event(
+                TcpStreamStreamWriteAttemptMetricEvent(TcpStreamStreamWriteAttemptOutcome.ERROR)
+            )
             reason = _map_io_exception_to_reason(e)
             raise TcpStreamIoError(
                 io_op_type=TCP_WRITE,
@@ -2536,6 +2805,7 @@ class TcpStreamEngine:
         finally:
             async with self._cond:
                 if exc is not None:
+                    self._send_metric_event(TcpStreamAbortiveCloseMetricEvent())
                     log_context = self._log_context
                     if log_context is not None:
                         payload = {
