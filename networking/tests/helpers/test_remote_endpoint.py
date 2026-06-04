@@ -119,6 +119,18 @@ def module_under_test():
     return m
 
 
+@pytest.fixture(autouse=True)
+def restore_module_patches(module_under_test):
+    original_get_running_loop = module_under_test.asyncio.get_running_loop
+    original_monotonic = module_under_test.monotonic
+
+    try:
+        yield
+    finally:
+        module_under_test.asyncio.get_running_loop = original_get_running_loop
+        module_under_test.monotonic = original_monotonic
+
+
 # -------------------------
 # Group a: Basic API contract and copy semantics
 # -------------------------

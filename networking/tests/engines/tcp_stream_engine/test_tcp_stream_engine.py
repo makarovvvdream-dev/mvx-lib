@@ -47,6 +47,9 @@ from mvx.common.logger import (
 )
 from mvx.networking.helpers import RemoteEndpoint
 from mvx.networking.metrics import Metric, MetricEvent
+from mvx.networking.metrics.asyncio_metrics_recorder.metrics_recorder import (
+    AsyncioMetricsRecorder,
+)
 
 from mvx.networking.engines.tcp_stream_engine.crypto_codec import CryptoCodec
 
@@ -5637,3 +5640,199 @@ async def test_p100_metric_event_failure_does_not_break_open_success(
 
     assert result is TcpStreamOpenOutcome.OPENED
     assert eng.state is EngineState.OPENED
+
+
+async def _wait_metric_dimension(
+    recorder: AsyncioMetricsRecorder,
+    *,
+    metric_name: str,
+    dimension: str,
+    expected: int,
+) -> None:
+    for _ in range(200):
+        snapshots = recorder.get_metric_snapshots()
+        metric_snapshot = snapshots.get(metric_name)
+
+        if metric_snapshot is not None:
+            dimensions = metric_snapshot["dimensions"]
+            assert isinstance(dimensions, dict)
+
+            if dimensions.get(dimension) == expected:
+                return
+
+        await asyncio.sleep(0.005)
+
+    snapshots = recorder.get_metric_snapshots()
+    raise AssertionError(
+        f"metric {metric_name!r} dimension {dimension!r} "
+        f"did not reach {expected!r}; snapshots={snapshots!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_p150_asyncio_metrics_recorder_smoke_records_engine_success_path(
+    remote_endpoint: _FakeRemoteEndpoint,
+    module_under_test,
+    monkeypatch,
+):
+    """AsyncioMetricsRecorder receives TcpStreamEngine events and updates metrics."""
+    recorder = AsyncioMetricsRecorder(entity_id="tcp-engine-metrics-smoke-1")
+    remote_endpoint.set_candidates([_ai_inet("192.0.2.10", 389)])
+
+    eng = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=recorder,
+    )
+
+    reader = _FakeStreamReader()
+    reader.set_next(b"hello")
+
+    writer = _FakeStreamWriter()
+
+    async def stub_open_socket(info: Any, cand: Any, *, use_ssl: bool) -> Any:
+        _ = info, cand, use_ssl
+        return reader, writer
+
+    monkeypatch.setattr(
+        module_under_test.TcpStreamEngine,
+        "_open_socket",
+        staticmethod(stub_open_socket),
+    )
+
+    start_result = await recorder.start()
+    assert start_result.success is True
+
+    try:
+        open_result = await eng.open()
+        read_result = await eng.read(5, mode=SocketTimeoutMode.UNLIMITED)
+        eng.write(b"abc")
+        await eng.drain(mode=SocketTimeoutMode.UNLIMITED)
+        close_result = await eng.close()
+
+        assert open_result is TcpStreamOpenOutcome.OPENED
+        assert read_result == b"hello"
+        assert writer.write_calls == [b"abc"]
+        assert writer.drain_calls == 1
+        assert close_result is TcpStreamCloseOutcome.CLOSED
+
+        stop_result = await recorder.stop()
+        assert stop_result.success is True
+
+        snapshots = recorder.get_metric_snapshots()
+
+        assert snapshots["tcp_stream.open.attempts"]["dimensions"] == {
+            "total": 1,
+            "success_total": 1,
+            "already_opened_total": 0,
+            "failure_total": 0,
+            "cancelled_total": 0,
+        }
+
+        assert snapshots["tcp_stream.stream_read.attempts"]["dimensions"] == {
+            "total": 1,
+            "success_total": 1,
+            "timeout_total": 0,
+            "error_total": 0,
+            "cancelled_total": 0,
+            "tls_error_total": 0,
+        }
+
+        assert snapshots["tcp_stream.bytes.received"]["dimensions"] == {
+            "total": 5,
+        }
+
+        assert snapshots["tcp_stream.stream_write.attempts"]["dimensions"] == {
+            "total": 1,
+            "success_total": 1,
+            "error_total": 0,
+            "tls_error_total": 0,
+        }
+
+        assert snapshots["tcp_stream.bytes.sent"]["dimensions"] == {
+            "total": 3,
+        }
+
+        assert snapshots["tcp_stream.drain.attempts"]["dimensions"] == {
+            "total": 1,
+            "success_total": 1,
+            "timeout_total": 0,
+            "error_total": 0,
+            "cancelled_total": 0,
+            "tls_error_total": 0,
+        }
+
+        assert snapshots["tcp_stream.close.attempts"]["dimensions"] == {
+            "total": 1,
+            "success_total": 1,
+            "not_opened_total": 0,
+            "failure_total": 0,
+            "cancelled_total": 0,
+        }
+
+    finally:
+        if recorder.get_status().value == "RUNNING":
+            await recorder.stop()
+
+
+@pytest.mark.asyncio
+async def test_p151_asyncio_metrics_recorder_smoke_records_remote_disconnect_path(
+    remote_endpoint: _FakeRemoteEndpoint,
+):
+    """AsyncioMetricsRecorder records remote disconnect and abortive close metrics."""
+    recorder = AsyncioMetricsRecorder(entity_id="tcp-engine-metrics-smoke-2")
+
+    eng = TcpStreamEngine(
+        remote_endpoint=cast(Any, remote_endpoint),
+        metrics_recorder=recorder,
+    )
+
+    eng._state = EngineState.OPENED
+
+    reader = _FakeStreamReader()
+    reader.set_next(b"")
+
+    writer = _FakeStreamWriter()
+
+    eng._reader = cast(Any, reader)
+    eng._writer = cast(Any, writer)
+
+    start_result = await recorder.start()
+    assert start_result.success is True
+
+    try:
+        with pytest.raises(TcpStreamRemotelyDisconnectedError):
+            await eng.read(1024, mode=SocketTimeoutMode.UNLIMITED)
+
+        stop_result = await recorder.stop()
+        assert stop_result.success is True
+
+        snapshots = recorder.get_metric_snapshots()
+
+        assert snapshots["tcp_stream.remote_disconnect"]["dimensions"] == {
+            "total": 1,
+        }
+
+        assert snapshots["tcp_stream.abortive_close"]["dimensions"] == {
+            "total": 1,
+        }
+
+        assert snapshots["tcp_stream.bytes.received"]["dimensions"] == {
+            "total": 0,
+        }
+
+        assert snapshots["tcp_stream.stream_read.attempts"]["dimensions"] == {
+            "total": 0,
+            "success_total": 0,
+            "timeout_total": 0,
+            "error_total": 0,
+            "cancelled_total": 0,
+            "tls_error_total": 0,
+        }
+
+        assert eng.state is EngineState.CLOSED
+        assert writer.close_calls == 1
+        assert writer.wait_closed_calls == 1
+
+    finally:
+        if recorder.get_status().value == "RUNNING":
+            await recorder.stop()
