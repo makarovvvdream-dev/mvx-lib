@@ -251,6 +251,7 @@ Use `AsyncioLogSink` when a sink needs asynchronous delivery behind the synchron
 event_model
 context_tree
 policy_and_payload_separation
+pattern_event_policy
 sink_delivery
 asyncio_log_sink
 package_bootstrap

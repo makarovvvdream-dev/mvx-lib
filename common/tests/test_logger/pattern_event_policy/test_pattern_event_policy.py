@@ -28,7 +28,8 @@ from dataclasses import dataclass
 import pytest
 
 from mvx.common.logger import LogEventMeta
-from mvx.networking.helpers.pattern_event_policy import (
+
+from mvx.common.logger.pattern_event_policy import (
     PatternLogEventPolicy,
     PatternLogEventPolicyAction,
     PatternLogEventPolicyConfig,

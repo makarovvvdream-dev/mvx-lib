@@ -38,6 +38,12 @@ For example:
 * a diagnostic policy may allow additional namespaces or event names;
 * a troubleshooting policy may enable events for a specific entity id or source location.
 
+The package provides a ready-to-use implementation for these cases: `PatternLogEventPolicy`.
+
+It allows logging width to be configured through ordered allow/deny rules. Rules use shell-style patterns and can match event namespace, event name, composed event key, entity id, source path, and source function.
+
+This means that many common logging-width decisions can be expressed through configuration, without implementing a custom policy class.
+
 This keeps event selection outside business code. The code can keep emitting the same events, while the configured policy decides which of them are allowed into the log in a particular situation.
 
 Event policy also keeps event selection separate from payload preparation and delivery.
@@ -159,6 +165,34 @@ The method returns:
 
 The exact implementation is up to the application or library.
 
+For simple application-specific logic, a custom policy object can implement this protocol directly.
+
+For configuration-driven selection, `MVX Logger` provides `PatternLogEventPolicy`, a ready-to-use policy based on ordered pattern rules.
+
+## Ready-to-use pattern policy
+
+Most applications do not need a custom event policy for basic logging-width configuration.
+
+`MVX Logger` includes `PatternLogEventPolicy`, a ready-to-use implementation that selects events by matching `LogEventMeta` fields against ordered rules.
+
+A rule may match:
+* composed event key;
+* event namespace;
+* event name;
+* entity id;
+* source path;
+* source function.
+
+Rules are checked in order. The first matching rule decides whether the event is enabled. If no rule matches, the policy uses its configured default decision.
+
+This makes it possible to express common logging-width scenarios such as:
+* allow only selected namespaces;
+* deny noisy event names;
+* enable diagnostics for one entity id;
+* enable or suppress events from a particular source module or function.
+
+The pattern policy still follows the same event policy contract. It receives only `LogEventMeta`, does not inspect payload, and runs before payload normalization.
+
 ## What to remember
 
 * Event policy controls logging width.
@@ -167,12 +201,14 @@ The exact implementation is up to the application or library.
 * It is applied before payload normalization.
 * If the event is rejected, payload normalization and sink delivery do not happen.
 * Event policy is local to the context where it is configured and is not inherited from the parent context.
+* `PatternLogEventPolicy` provides a ready-to-use implementation based on ordered allow/deny pattern rules.
 
 ```{toctree}
 :maxdepth: 1
 :caption: What to read next
 
 event_metadata
+pattern_event_policy
 writing_policy
 сonfiguring_policy
 ```
