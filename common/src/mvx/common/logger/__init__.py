@@ -40,6 +40,14 @@ from .log_context import (
     LogErrorHandlingPolicy,
 )
 
+from .pattern_event_policy import (
+    PatternLogEventPolicyAction,
+    PatternLogEventPolicyRuleConfig,
+    PatternLogEventPolicyConfig,
+    PatternLogEventPolicy,
+)
+
+
 from .log_payload_processor import (
     LogPayloadProcessor,
     LogVerbosityLevel,
@@ -106,6 +114,11 @@ __all__ = (
     # from .log_context
     "LogContext",
     "LogErrorHandlingPolicy",
+    # from .pattern_event_policy
+    "PatternLogEventPolicyAction",
+    "PatternLogEventPolicyRuleConfig",
+    "PatternLogEventPolicyConfig",
+    "PatternLogEventPolicy",
     # from .log_payload_processor
     "LogPayloadProcessor",
     "LogVerbosityLevel",

@@ -53,11 +53,16 @@ This is controlled by policies.
 
 A policy may allow or reject an event by its metadata: namespace, event name, entity id, or source location. The policy does not inspect payload, level, event type, or timestamp.
 
+The package includes a ready-to-use pattern-based policy for this purpose: `PatternLogEventPolicy`. It allows events to be selected by ordered allow/deny rules using shell-style patterns. Rules can match the composed event name, event namespace, event name, entity id, source path, and source function. The first matching rule decides whether the event is enabled; if no rule matches, the policy falls back to its configured default decision. 
+
+This gives applications and libraries a practical way to configure logging
+width without writing a custom policy class for every project.
+
 This makes it possible to control which parts of a library are verbose, which parts are quiet, and which parts are enabled only in diagnostic mode.
 
 For operation-style logging, the policy controls whether the ordinary invocation event is enabled. Failure and cancellation are treated as error-path outcomes by `log_invocation`.
 
-For example, a policy may enable only selected namespaces, suppress noisy event names, or enable diagnostics for a particular entity or source location.
+For example, a policy may enable only selected namespaces, suppress noisy event names, or enable diagnostics for a particular entity or source location. The ready-to-use pattern policy covers these cases through ordered wildcard rules, while custom policies remain available for domain-specific selection logic. 
 
 ### Depth
 
