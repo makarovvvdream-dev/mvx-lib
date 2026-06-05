@@ -45,6 +45,9 @@ from mvx.common.logger import (
     LogEvent,
     LogPayloadProcessor,
 )
+
+from mvx.networking.metrics.metrics_runtime.metrics_runtime import MetricsRuntime
+
 from mvx.networking.helpers import RemoteEndpoint
 from mvx.networking.metrics import Metric, MetricEvent
 from mvx.networking.metrics.asyncio_metrics_recorder.metrics_recorder import (
@@ -5836,3 +5839,177 @@ async def test_p151_asyncio_metrics_recorder_smoke_records_remote_disconnect_pat
     finally:
         if recorder.get_status().value == "RUNNING":
             await recorder.stop()
+
+
+def _shutdown_metrics_runtime_safely(runtime: MetricsRuntime) -> None:
+    # noinspection PyBroadException
+    try:
+        runtime.shutdown()
+    except Exception:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_p101_metrics_runtime_smoke_records_tcp_stream_engine_success_path(
+    remote_endpoint: _FakeRemoteEndpoint,
+    module_under_test,
+    monkeypatch,
+):
+    """MetricsRuntime-created recorder receives TcpStreamEngine metrics end-to-end."""
+    runtime = MetricsRuntime(namespace="tcp-stream-engine-runtime-smoke")
+
+    try:
+        runtime.start()
+        recorder = runtime.create_recorder("engine-recorder")
+
+        remote_endpoint.set_candidates([_ai_inet("192.0.2.10", 389)])
+
+        eng = TcpStreamEngine(
+            remote_endpoint=cast(Any, remote_endpoint),
+            metrics_recorder=recorder,
+        )
+
+        reader = _FakeStreamReader()
+        reader.set_next(b"hello")
+
+        writer = _FakeStreamWriter()
+
+        async def stub_open_socket(info: Any, cand: Any, *, use_ssl: bool) -> Any:
+            _ = info, cand, use_ssl
+            return reader, writer
+
+        monkeypatch.setattr(
+            module_under_test.TcpStreamEngine,
+            "_open_socket",
+            staticmethod(stub_open_socket),
+        )
+
+        open_result = await eng.open()
+        read_result = await eng.read(5, mode=SocketTimeoutMode.UNLIMITED)
+        eng.write(b"abc")
+        await eng.drain(mode=SocketTimeoutMode.UNLIMITED)
+        close_result = await eng.close()
+
+        assert open_result is TcpStreamOpenOutcome.OPENED
+        assert read_result == b"hello"
+        assert writer.write_calls == [b"abc"]
+        assert writer.drain_calls == 1
+        assert close_result is TcpStreamCloseOutcome.CLOSED
+
+        runtime.stop_recorder("engine-recorder")
+
+        snapshots = recorder.get_metric_snapshots()
+
+        assert snapshots["tcp_stream.open.attempts"]["dimensions"] == {
+            "total": 1,
+            "success_total": 1,
+            "already_opened_total": 0,
+            "failure_total": 0,
+            "cancelled_total": 0,
+        }
+
+        assert snapshots["tcp_stream.stream_read.attempts"]["dimensions"] == {
+            "total": 1,
+            "success_total": 1,
+            "timeout_total": 0,
+            "error_total": 0,
+            "cancelled_total": 0,
+            "tls_error_total": 0,
+        }
+
+        assert snapshots["tcp_stream.bytes.received"]["dimensions"] == {
+            "total": 5,
+        }
+
+        assert snapshots["tcp_stream.stream_write.attempts"]["dimensions"] == {
+            "total": 1,
+            "success_total": 1,
+            "error_total": 0,
+            "tls_error_total": 0,
+        }
+
+        assert snapshots["tcp_stream.bytes.sent"]["dimensions"] == {
+            "total": 3,
+        }
+
+        assert snapshots["tcp_stream.drain.attempts"]["dimensions"] == {
+            "total": 1,
+            "success_total": 1,
+            "timeout_total": 0,
+            "error_total": 0,
+            "cancelled_total": 0,
+            "tls_error_total": 0,
+        }
+
+        assert snapshots["tcp_stream.close.attempts"]["dimensions"] == {
+            "total": 1,
+            "success_total": 1,
+            "not_opened_total": 0,
+            "failure_total": 0,
+            "cancelled_total": 0,
+        }
+
+    finally:
+        _shutdown_metrics_runtime_safely(runtime)
+
+
+@pytest.mark.asyncio
+async def test_p102_metrics_runtime_smoke_records_tcp_stream_engine_abortive_path(
+    remote_endpoint: _FakeRemoteEndpoint,
+):
+    """MetricsRuntime-created recorder records remote disconnect and abortive close."""
+    runtime = MetricsRuntime(namespace="tcp-stream-engine-runtime-smoke")
+
+    try:
+        runtime.start()
+        recorder = runtime.create_recorder("engine-recorder")
+
+        eng = TcpStreamEngine(
+            remote_endpoint=cast(Any, remote_endpoint),
+            metrics_recorder=recorder,
+        )
+
+        eng._state = EngineState.OPENED
+
+        reader = _FakeStreamReader()
+        reader.set_next(b"")
+
+        writer = _FakeStreamWriter()
+
+        eng._reader = cast(Any, reader)
+        eng._writer = cast(Any, writer)
+
+        with pytest.raises(TcpStreamRemotelyDisconnectedError):
+            await eng.read(1024, mode=SocketTimeoutMode.UNLIMITED)
+
+        runtime.stop_recorder("engine-recorder")
+
+        snapshots = recorder.get_metric_snapshots()
+
+        assert snapshots["tcp_stream.remote_disconnect"]["dimensions"] == {
+            "total": 1,
+        }
+
+        assert snapshots["tcp_stream.abortive_close"]["dimensions"] == {
+            "total": 1,
+        }
+
+        assert snapshots["tcp_stream.bytes.received"]["dimensions"] == {
+            "total": 0,
+        }
+
+        assert snapshots["tcp_stream.stream_read.attempts"]["dimensions"] == {
+            "total": 0,
+            "success_total": 0,
+            "timeout_total": 0,
+            "error_total": 0,
+            "cancelled_total": 0,
+            "tls_error_total": 0,
+        }
+
+        assert eng.state is EngineState.CLOSED
+        assert writer.close_calls == 1
+        assert writer.wait_closed_calls == 1
+
+    finally:
+        _shutdown_metrics_runtime_safely(runtime)
