@@ -1664,15 +1664,32 @@ async def test_k07_many_threads_call_start_concurrently_join_single_start() -> N
     recorder = RecordingMetricsRecorder(entity_id="recorder-1")
     recorder.block_starting = True
 
+    handles_ready = threading.Event()
+    handles_lock = threading.Lock()
+    handles_count = 0
+
+    def worker(_: int) -> Any:
+        nonlocal handles_count
+
+        handle = recorder.start()
+
+        with handles_lock:
+            handles_count += 1
+
+            if handles_count == thread_count:
+                handles_ready.set()
+
+        return handle.wait()
+
     async def run_starters() -> list[Any]:
-        return await run_many_threads_async(
-            thread_count,
-            lambda _index: recorder.start().wait(),
-        )
+        return await run_many_threads_async(thread_count, worker)
 
     starters_task = asyncio.create_task(run_starters())
 
     await wait_thread_event_async(recorder.starting_entered)
+    await wait_thread_event_async(handles_ready)
+
+    assert recorder.get_status() is AsyncioMetricsRecorderState.STARTING
 
     recorder.starting_release.set()
 
@@ -1695,15 +1712,32 @@ async def test_k08_many_threads_call_stop_concurrently_join_single_stop() -> Non
 
     recorder.block_stopped = True
 
+    handles_ready = threading.Event()
+    handles_lock = threading.Lock()
+    handles_count = 0
+
+    def worker(_: int) -> Any:
+        nonlocal handles_count
+
+        handle = recorder.stop()
+
+        with handles_lock:
+            handles_count += 1
+
+            if handles_count == thread_count:
+                handles_ready.set()
+
+        return handle.wait()
+
     async def run_stoppers() -> list[Any]:
-        return await run_many_threads_async(
-            thread_count,
-            lambda _index: recorder.stop().wait(),
-        )
+        return await run_many_threads_async(thread_count, worker)
 
     stoppers_task = asyncio.create_task(run_stoppers())
 
     await wait_thread_event_async(recorder.stopped_entered)
+    await wait_thread_event_async(handles_ready)
+
+    assert recorder.get_status() is AsyncioMetricsRecorderState.STOPPING
 
     recorder.stopped_release.set()
 
