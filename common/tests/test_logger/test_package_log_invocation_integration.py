@@ -24,16 +24,16 @@ class OperationResult:
 
 
 class InvocationOwner:
-    def __init__(self, ctx: LogContext, identity: str = "owner-1") -> None:
+    def __init__(self, ctx: LogContext, entity_id: str = "owner-1") -> None:
         self._ctx = ctx
-        self._identity = identity
+        self._entity_id = entity_id
 
     def get_log_context(self) -> LogContext:
         return self._ctx
 
     @property
-    def identity(self) -> str:
-        return self._identity
+    def entity_id(self) -> str:
+        return self._entity_id
 
 
 class CustomOperationError(RuntimeError):
@@ -75,7 +75,7 @@ def configure_file_logging(tmp_path: Path) -> tuple[Path, LogContext]:
 
 def test_a01_sync_invocation_writes_invoke_and_success_events_to_file(tmp_path: Path) -> None:
     log_file, ctx = configure_file_logging(tmp_path)
-    owner = InvocationOwner(ctx, identity="sync-owner")
+    owner = InvocationOwner(ctx, entity_id="sync-owner")
 
     @logger_pack.log_invocation(
         "operation.transfer",
@@ -124,7 +124,7 @@ def test_a01_sync_invocation_writes_invoke_and_success_events_to_file(tmp_path: 
 
 def test_a02_sync_invocation_writes_failed_event_to_file_and_reraises(tmp_path: Path) -> None:
     log_file, ctx = configure_file_logging(tmp_path)
-    owner = InvocationOwner(ctx, identity="sync-owner")
+    owner = InvocationOwner(ctx, entity_id="sync-owner")
 
     @logger_pack.log_invocation(
         "operation.fail",
@@ -164,7 +164,7 @@ def test_a02_sync_invocation_writes_failed_event_to_file_and_reraises(tmp_path: 
 
 def test_a03_nested_sync_invocation_logs_error_payload_only_once(tmp_path: Path) -> None:
     log_file, ctx = configure_file_logging(tmp_path)
-    owner = InvocationOwner(ctx, identity="sync-owner")
+    owner = InvocationOwner(ctx, entity_id="sync-owner")
 
     @logger_pack.log_invocation(
         "operation.inner",
@@ -206,7 +206,7 @@ async def test_b01_async_invocation_writes_invoke_and_success_events_to_file(
     tmp_path: Path,
 ) -> None:
     log_file, ctx = configure_file_logging(tmp_path)
-    owner = InvocationOwner(ctx, identity="async-owner")
+    owner = InvocationOwner(ctx, entity_id="async-owner")
 
     @logger_pack.log_invocation(
         "operation.async",
@@ -257,7 +257,7 @@ async def test_b02_async_invocation_writes_failed_event_to_file_and_reraises(
     tmp_path: Path,
 ) -> None:
     log_file, ctx = configure_file_logging(tmp_path)
-    owner = InvocationOwner(ctx, identity="async-owner")
+    owner = InvocationOwner(ctx, entity_id="async-owner")
 
     @logger_pack.log_invocation(
         "operation.async.fail",
@@ -297,7 +297,7 @@ async def test_b03_async_invocation_writes_cancelled_event_to_file_and_reraises(
     tmp_path: Path,
 ) -> None:
     log_file, ctx = configure_file_logging(tmp_path)
-    owner = InvocationOwner(ctx, identity="async-owner")
+    owner = InvocationOwner(ctx, entity_id="async-owner")
 
     @logger_pack.log_invocation(
         "operation.async.cancel",

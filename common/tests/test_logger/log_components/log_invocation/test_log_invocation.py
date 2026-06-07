@@ -118,13 +118,13 @@ class ContextProvider:
 
 
 class EntityProvider(ContextProvider):
-    def __init__(self, ctx: RecordingContext, identity: str = "entity-1") -> None:
+    def __init__(self, ctx: RecordingContext, entity_id: str = "entity-1") -> None:
         super().__init__(ctx)
-        self._identity = identity
+        self._entity_id = entity_id
 
     @property
-    def identity(self) -> str:
-        return self._identity
+    def entity_id(self) -> str:
+        return self._entity_id
 
 
 @dataclass
@@ -231,7 +231,7 @@ def test_a03_resolve_context_raises_when_no_arguments() -> None:
 
 def test_a04_resolve_entity_id_from_first_argument_provider() -> None:
     ctx = RecordingContext()
-    provider = EntityProvider(ctx, identity="abc-123")
+    provider = EntityProvider(ctx, entity_id="abc-123")
 
     assert _resolve_entity_id((provider,)) == "abc-123"
 
@@ -891,7 +891,7 @@ def test_i01_log_invocation_sync_success_emits_invoke_and_success() -> None:
 
 def test_i02_log_invocation_sync_uses_context_provider_and_entity_provider() -> None:
     ctx = RecordingContext()
-    owner = EntityProvider(ctx, identity="owner-1")
+    owner = EntityProvider(ctx, entity_id="owner-1")
 
     @log_invocation("op.entity")
     def target(self: EntityProvider, value: int) -> int:
@@ -907,7 +907,7 @@ def test_i02_log_invocation_sync_uses_context_provider_and_entity_provider() -> 
 
 def test_i03_log_invocation_sync_uses_explicit_entity_id_getter_over_provider() -> None:
     ctx = RecordingContext()
-    owner = EntityProvider(ctx, identity="owner-1")
+    owner = EntityProvider(ctx, entity_id="owner-1")
 
     @log_invocation(
         "op.entity",
@@ -1500,7 +1500,7 @@ async def test_k01_log_invocation_async_success_emits_invoke_and_success() -> No
 @pytest.mark.asyncio
 async def test_k02_log_invocation_async_uses_provider_context() -> None:
     ctx = RecordingContext()
-    owner = EntityProvider(ctx, identity="async-owner")
+    owner = EntityProvider(ctx, entity_id="async-owner")
 
     @log_invocation("op.async")
     async def target(self: EntityProvider, value: int) -> int:

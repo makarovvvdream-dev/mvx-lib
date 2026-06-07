@@ -52,9 +52,11 @@ check event policy
 
 Context resolution happens before event policy is checked and before the `invoke` outcome can be emitted.
 
-If `ctx` is not supplied and the first positional argument does not provide `LogContextProviderProto`, the wrapped operation body is not called.
+If `ctx` is not supplied and the first positional argument does not provide `LogContextProviderProto`, the wrapped
+operation body is not called.
 
-If a method-based provider returns `None`, the logging-enabled setup stops there. The wrapped operation body is called normally, and the decorator emits no lifecycle events for that call.
+If a method-based provider returns `None`, the logging-enabled setup stops there. The wrapped operation body is called
+normally, and the decorator emits no lifecycle events for that call.
 
 ## Explicit context
 
@@ -106,17 +108,20 @@ Here the decorator resolves the context as:
 args[0] -> get_log_context() -> effective context
 ```
 
-The object does not need to inherit from a special base class. It only needs to satisfy the context-provider protocol structurally.
+The object does not need to inherit from a special base class. It only needs to satisfy the context-provider protocol
+structurally.
 
 `get_log_context()` may return either a context or `None`.
 
 Returning a context enables normal decorator-driven lifecycle logging.
 
-Returning `None` disables decorator-driven lifecycle logging for the current call. The operation still runs normally, but the decorator does not build metadata, does not check event policy, and does not emit lifecycle outcomes.
+Returning `None` disables decorator-driven lifecycle logging for the current call. The operation still runs normally,
+but the decorator does not build metadata, does not check event policy, and does not emit lifecycle outcomes.
 
 ## Missing context
 
-If `ctx` is not supplied and the decorated function receives no first positional argument that provides `LogContextProviderProto`, the decorator raises a runtime error.
+If `ctx` is not supplied and the decorated function receives no first positional argument that provides
+`LogContextProviderProto`, the decorator raises a runtime error.
 
 For example, this is not enough:
 
@@ -143,7 +148,8 @@ def load_config(path: str) -> dict[str, object]:
 
 A method-based context provider may return `None`.
 
-This is not treated as a missing context. It is an explicit request to disable decorator-driven logging for the current call.
+This is not treated as a missing context. It is an explicit request to disable decorator-driven logging for the current
+call.
 
 ```python
 from mvx.common.logger import LogContextProto, log_invocation
@@ -163,10 +169,11 @@ class Client:
 
 If `get_log_context()` returns a context, `connect()` is logged normally.
 
-If `get_log_context()` returns `None`, `connect()` is executed normally, but the decorator emits no `invoke`, `success`, `failed`, or `cancelled` outcomes.
+If `get_log_context()` returns `None`, `connect()` is executed normally, but the decorator emits no `invoke`, `success`,
+`failed`, or `cancelled` outcomes.
 
-In the disabled case, the decorator also does not resolve `entity_id`, does not build `LogEventMeta`, and does not call event policy.
-
+In the disabled case, the decorator also does not resolve `entity_id`, does not build `LogEventMeta`, and does not call
+event policy.
 
 ## Factory functions and closures
 
@@ -192,7 +199,8 @@ Here `connect()` has no `self` and no context argument.
 
 The context is supplied explicitly through `ctx=log_context`.
 
-The `target` value is not a function argument either. It belongs to the outer function scope and is added to the `invoke` payload through `log_closures_on_invoke`.
+The `target` value is not a function argument either. It belongs to the outer function scope and is added to the
+`invoke` payload through `log_closures_on_invoke`.
 
 ## Entity id resolution
 
@@ -214,7 +222,7 @@ The decorator resolves it in two ways:
 
 ```text
 explicit entity_id_getter
-first positional argument with identity property
+first positional argument with entity_id property
 ```
 
 ## Explicit entity_id_getter
@@ -241,13 +249,16 @@ The getter takes no arguments.
 
 It is called when the wrapper prepares the logging frame, before `LogEventMeta` is built.
 
-If the getter raises, the wrapped operation body is not called, and the exception is not logged as a `failed` outcome of the decorated operation.
+If the getter raises, the wrapped operation body is not called, and the exception is not logged as a `failed` outcome of
+the decorated operation.
 
-This is intentional. `entity_id_getter` is part of decorator integration, not part of the decorated operation body. A failure here usually means that the decorator was embedded incorrectly. It is better for such errors to surface immediately than to be silently swallowed or reported as an operation failure.
+This is intentional. `entity_id_getter` is part of decorator integration, not part of the decorated operation body. A
+failure here usually means that the decorator was embedded incorrectly. It is better for such errors to surface
+immediately than to be silently swallowed or reported as an operation failure.
 
 ## Method-based entity id
 
-For methods, the first positional argument may provide an `identity` property.
+For methods, the first positional argument may provide an `entity_id` property.
 
 ```python
 from mvx.common.logger import LogContextProto, log_invocation
@@ -262,7 +273,7 @@ class Client:
         return self._log_context
 
     @property
-    def identity(self) -> str:
+    def entity_id(self) -> str:
         return self._client_id
 
     @log_invocation("connect")
@@ -273,7 +284,7 @@ class Client:
 The decorator resolves:
 
 ```text
-args[0] -> identity -> entity_id
+args[0] -> entity_id -> entity_id
 ```
 
 This value is placed into `LogEventMeta.entity_id`.
@@ -282,7 +293,7 @@ It is metadata, not payload.
 
 ## No entity id
 
-If neither `entity_id_getter` nor an `identity` provider is available, `entity_id` is `None`.
+If neither `entity_id_getter` nor an `entity_id` provider is available, `entity_id` is `None`.
 
 That is valid.
 
@@ -303,7 +314,7 @@ The resolved context supplies the event namespace.
 The decorator builds metadata with:
 
 ```python
-event_namespace=effective_ctx.namespace
+event_namespace = effective_ctx.namespace
 ```
 
 That means the namespace is not passed directly to `log_invocation`.
@@ -324,14 +335,15 @@ The event name is the same. The context namespace tells where the event belongs.
 The decorator builds `LogEventMeta` with empty source fields:
 
 ```python
-source_path=None
-source_line=None
-source_func=None
+source_path = None
+source_line = None
+source_func = None
 ```
 
 `log_invocation` does not automatically populate source file, source line, or source function information.
 
-If source metadata is needed, it belongs to manual logging calls or another component that explicitly supplies those fields.
+If source metadata is needed, it belongs to manual logging calls or another component that explicitly supplies those
+fields.
 
 ## Bound arguments
 
@@ -356,7 +368,8 @@ log_kwargs_on_invoke
 
 The bound arguments are captured once when the wrapper is called.
 
-Field paths based on those arguments may still read current object attributes later, because `context_fields` are resolved separately for each emitted outcome.
+Field paths based on those arguments may still read current object attributes later, because `context_fields` are
+resolved separately for each emitted outcome.
 
 ## Public API method pattern
 
@@ -375,7 +388,7 @@ class Repository:
         return self._log_context
 
     @property
-    def identity(self) -> str:
+    def entity_id(self) -> str:
         return self._repo_id
 
     @log_invocation(
@@ -390,14 +403,14 @@ This method provides both:
 
 ```text
 context       -> get_log_context()
-entity_id     -> identity
+entity_id     -> entity_id
 ```
 
 The decorated operation name is `save`.
 
 The effective namespace comes from the resolved context.
 
-The effective entity id comes from `identity`.
+The effective entity id comes from `entity_id`.
 
 ## Avoid duplicate payload fields
 
@@ -437,7 +450,7 @@ Setup can fail if:
 ctx is not supplied and the first positional argument does not provide LogContextProviderProto
 entity_id_getter raises
 get_log_context() raises
-identity property access raises
+entity_id property access raises
 ```
 
 Returning `None` from `get_log_context()` is not a setup failure.
@@ -446,7 +459,9 @@ These failures happen before `LogEventMeta` is fully prepared and before the `in
 
 They are configuration or integration errors around the decorator, not failures of the decorated operation body.
 
-This behavior is intentional. Setup failures usually indicate incorrect decorator integration: missing context provider, broken `get_log_context()`, broken `entity_id_getter`, or broken `identity` provider. Such errors should surface immediately instead of being swallowed or logged as ordinary operation failures.
+This behavior is intentional. Setup failures usually indicate incorrect decorator integration: missing context provider,
+broken `get_log_context()`, broken `entity_id_getter`, or broken `entity_id` provider. Such errors should surface
+immediately instead of being swallowed or logged as ordinary operation failures.
 
 ## Design summary
 
@@ -458,6 +473,7 @@ Use `get_log_context()` on the first positional argument for public API methods.
 
 Return `None` from `get_log_context()` to run a call without decorator-driven logging.
 
-Use `entity_id_getter` or an `identity` property when the event should be attached to a stable runtime entity.
+Use `entity_id_getter` or an `entity_id` property when the event should be attached to a stable runtime entity.
 
-The context provides the namespace and logging pipeline. The entity id provides optional metadata about the object involved in the event.
+The context provides the namespace and logging pipeline. The entity id provides optional metadata about the object
+involved in the event.

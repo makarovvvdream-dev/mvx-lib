@@ -9,9 +9,11 @@
 
 `log_invocation` records failed and cancelled operation outcomes without changing the operation semantics.
 
-If the decorated operation raises an ordinary exception, the decorator can emit a `failed` outcome and then re-raise the same exception.
+If the decorated operation raises an ordinary exception, the decorator can emit a `failed` outcome and then re-raise the
+same exception.
 
-If the decorated operation raises `asyncio.CancelledError`, the decorator can emit a `cancelled` outcome and then re-raise the same cancellation.
+If the decorated operation raises `asyncio.CancelledError`, the decorator can emit a `cancelled` outcome and then
+re-raise the same cancellation.
 
 The core rule is:
 
@@ -20,7 +22,8 @@ record the outcome
 preserve the original exception or cancellation
 ```
 
-The decorator does not turn domain exceptions into logger exceptions, and it does not convert cancellation into ordinary failure.
+The decorator does not turn domain exceptions into logger exceptions, and it does not convert cancellation into ordinary
+failure.
 
 ## Failure vs cancellation
 
@@ -38,7 +41,8 @@ event_outcome = "failed"
 event_outcome = "cancelled"
 ```
 
-This distinction matters because cancellation is part of asyncio control flow. It usually means that the operation was stopped from outside or by task orchestration, not that the operation produced an ordinary domain failure.
+This distinction matters because cancellation is part of asyncio control flow. It usually means that the operation was
+stopped from outside or by task orchestration, not that the operation produced an ordinary domain failure.
 
 ## Failed outcome
 
@@ -69,7 +73,8 @@ The error payload is built through the resolved context:
 effective_ctx.build_error_payload(err)
 ```
 
-The decorator does not build the error representation directly. It asks the context to do it, so the same error-payload rules are shared with the rest of the logger infrastructure.
+The decorator does not build the error representation directly. It asks the context to do it, so the same error-payload
+rules are shared with the rest of the logger infrastructure.
 
 ## Cancelled outcome
 
@@ -98,7 +103,8 @@ It may also contain `context_fields`.
 
 Cancellation is not treated as a normal failed operation. It has its own outcome and its own default level.
 
-If the same cancellation exception instance is already marked as logged, the decorator does not emit another `cancelled` outcome.
+If the same cancellation exception instance is already marked as logged, the decorator does not emit another `cancelled`
+outcome.
 
 ## Levels
 
@@ -163,7 +169,8 @@ is_error_logged(err)
 mark_error_logged(err)
 ```
 
-If an exception instance has not been logged with full details yet, the decorator emits a full failed outcome and marks that exception as logged.
+If an exception instance has not been logged with full details yet, the decorator emits a full failed outcome and marks
+that exception as logged.
 
 If the same exception instance is seen again, the decorator emits a suppressed failed outcome.
 
@@ -239,7 +246,8 @@ It uses `error_level_suppressed`.
 
 The exception is marked as logged after the suppressed failed outcome is emitted.
 
-This is useful when an exception type is expected, already logged elsewhere, or too noisy for full repeated error payloads.
+This is useful when an exception type is expected, already logged elsewhere, or too noisy for full repeated error
+payloads.
 
 ## Policy and repeated-error marker
 
@@ -336,7 +344,7 @@ Examples:
 ctx is not supplied and the first positional argument does not provide LogContextProviderProto
 get_log_context() raises
 entity_id_getter raises
-identity property access raises
+entity_id property access raises
 ```
 
 Returning `None` from `get_log_context()` is not a setup failure and is not logged as a `failed` outcome.
@@ -347,7 +355,8 @@ They happen before `LogEventMeta` is fully prepared and before the `invoke` outc
 
 They are intentionally not logged as `failed` outcomes of the decorated event.
 
-Such errors usually mean the decorator was embedded incorrectly. It is better for them to surface immediately than to be swallowed or reported as operation failures.
+Such errors usually mean the decorator was embedded incorrectly. It is better for them to surface immediately than to be
+swallowed or reported as operation failures.
 
 ## Errors while logging
 
@@ -355,7 +364,8 @@ This article describes errors raised by the decorated operation.
 
 It is separate from logging infrastructure failures.
 
-If the decorator tries to emit a `LogEvent` and the configured sink fails, that is handled by `LogContext` according to its `LogErrorHandlingPolicy`.
+If the decorator tries to emit a `LogEvent` and the configured sink fails, that is handled by `LogContext` according to
+its `LogErrorHandlingPolicy`.
 
 That policy controls logging infrastructure errors, not domain exceptions raised by the decorated operation.
 

@@ -81,7 +81,9 @@ decorate(func)
 wrapped callable
 ```
 
-The wrapper is the runtime part. It resolves the logging context, calls the original function, and preserves the original return/exception/cancellation semantics. When decorator-driven logging is enabled for the call, it also builds metadata and emits lifecycle outcomes.
+The wrapper is the runtime part. It resolves the logging context, calls the original function, and preserves the
+original return/exception/cancellation semantics. When decorator-driven logging is enabled for the call, it also builds
+metadata and emits lifecycle outcomes.
 
 ## Static configuration captured by the decorator
 
@@ -247,9 +249,11 @@ optionally emit invoke
 
 If setup fails, the operation body is not called.
 
-Returning None from get_log_context() is not a setup failure. It disables decorator-driven logging for the current call, and the original operation is still called.
+Returning None from get_log_context() is not a setup failure. It disables decorator-driven logging for the current call,
+and the original operation is still called.
 
-That is intentional. Setup failures indicate incorrect integration of the decorator, not failure of the decorated operation itself.
+That is intentional. Setup failures indicate incorrect integration of the decorator, not failure of the decorated
+operation itself.
 
 ## Argument extraction
 
@@ -296,7 +300,8 @@ This is the method-based path, where `args[0]` is normally `self`.
 
 If `ctx` is not supplied and the first positional argument does not provide `LogContextProviderProto`, setup fails.
 
-If the method-based provider returns `None`, setup stops without failure and the original operation is called without decorator-driven logging.
+If the method-based provider returns `None`, setup stops without failure and the original operation is called without
+decorator-driven logging.
 
 The context is required because the decorator delegates important work to it:
 
@@ -325,14 +330,15 @@ entity_id_getter() -> entity_id
 Otherwise, the wrapper looks at the first positional argument:
 
 ```text
-args[0].identity -> entity_id
+args[0].entity_id -> entity_id
 ```
 
 If neither path is available, the entity id is `None`.
 
-If `entity_id_getter` or `identity` access raises, setup fails and the operation body is not called.
+If `entity_id_getter` or `entity_id` access raises, setup fails and the operation body is not called.
 
-This is intentional. Entity id resolution is part of decorator integration. A broken entity provider should surface immediately instead of being logged as an operation failure.
+This is intentional. Entity id resolution is part of decorator integration. A broken entity provider should surface
+immediately instead of being logged as an operation failure.
 
 ## Metadata construction
 
@@ -357,7 +363,8 @@ The event name comes from the decorator argument.
 
 The entity id comes from the entity resolution step.
 
-Source fields are intentionally set to `None`. `log_invocation` does not collect source file, source line, or source function metadata.
+Source fields are intentionally set to `None`. `log_invocation` does not collect source file, source line, or source
+function metadata.
 
 ## Event policy check
 
@@ -438,7 +445,7 @@ The shape is:
 LogEvent(
     level=...,
     meta=event_meta,
-    event_outcome=..., 
+    event_outcome=...,
     timestamp=time.time(),
     payload=payload,
 )
@@ -454,7 +461,8 @@ This is important: the decorator does not call the sink directly.
 
 It always goes through `LogContext`.
 
-That keeps sink delivery, logging infrastructure error handling, and downstream behavior owned by the core logger infrastructure.
+That keeps sink delivery, logging infrastructure error handling, and downstream behavior owned by the core logger
+infrastructure.
 
 ## Invoke emitter
 
@@ -696,7 +704,8 @@ It is called whenever `context_formatter` is provided, even if no fields were re
 
 If the formatter returns a dictionary, that dictionary is injected into the target payload.
 
-If the formatter raises or returns a non-dictionary value, the helper falls back to normal context field handling for resolved fields.
+If the formatter raises or returns a non-dictionary value, the helper falls back to normal context field handling for
+resolved fields.
 
 Formatter output is also checked for system-key collisions.
 
@@ -710,7 +719,8 @@ cancelled
 closures
 ```
 
-If formatter output contains any system key, it is placed under `payload["context"]` instead of being merged into the top-level payload.
+If formatter output contains any system key, it is placed under `payload["context"]` instead of being merged into the
+top-level payload.
 
 This prevents formatter output from overwriting lifecycle-owned payload sections.
 
@@ -781,7 +791,8 @@ For composite objects, path segments are resolved with attribute access.
 
 For dictionaries, field specs are ignored and the whole dictionary is normalized.
 
-If selected fields cannot be resolved for a list, tuple, or composite object, the helper falls back to whole-result normalization.
+If selected fields cannot be resolved for a list, tuple, or composite object, the helper falls back to whole-result
+normalization.
 
 ## Error policy pipeline
 
@@ -916,9 +927,11 @@ It builds on the logger infrastructure instead of becoming part of the infrastru
 
 At decoration time, `log_invocation` validates and captures static configuration.
 
-At call time, the wrapper resolves bound arguments and the effective context. When decorator-driven logging is enabled for the call, it also resolves entity id, metadata, and the event-policy decision.
+At call time, the wrapper resolves bound arguments and the effective context. When decorator-driven logging is enabled
+for the call, it also resolves entity id, metadata, and the event-policy decision.
 
-At outcome time, internal emitters build payloads, construct `LogEvent` records, and emit them through the resolved context.
+At outcome time, internal emitters build payloads, construct `LogEvent` records, and emit them through the resolved
+context.
 
 The component is deliberately organized around operation outcomes:
 
@@ -931,4 +944,5 @@ cancelled
 
 Each outcome has its own emitter, payload sources, level, and control-flow position.
 
-The result is a focused operation-logging runtime layered above `LogContext`, not a replacement for the core logger pipeline.
+The result is a focused operation-logging runtime layered above `LogContext`, not a replacement for the core logger
+pipeline.
