@@ -1,6 +1,6 @@
 [project]
 name = "mvx-common"
-version = "0.2.3"
+version = "0.3.0"
 description = "Common utilities for MVX Python packages."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -75,13 +75,13 @@ target-version = "py311"
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = [
-  "F841",
-  "S101",
-  "SLF001",
-  "PLR2004",
-  "D",
-  "ANN",
-  "ARG001",
+    "F841",
+    "S101",
+    "SLF001",
+    "PLR2004",
+    "D",
+    "ANN",
+    "ARG001",
 ]
 
 [tool.coverage.run]
