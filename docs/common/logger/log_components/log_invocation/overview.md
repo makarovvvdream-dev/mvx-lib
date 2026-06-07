@@ -83,7 +83,8 @@ event_name     = "bind"
 event_outcome  = "cancelled"
 ```
 
-So `invoke`, `success`, `failed`, and `cancelled` are not separate events. They are outcomes of the same decorated event.
+So `invoke`, `success`, `failed`, and `cancelled` are not separate events. They are outcomes of the same decorated
+event.
 
 ## What problem it solves
 
@@ -115,13 +116,15 @@ else:
 
 `log_invocation` moves this repeated operation-lifecycle pattern to the method boundary.
 
-The method stays focused on the operation itself. The decorator describes how that operation should be represented in structured logs.
+The method stays focused on the operation itself. The decorator describes how that operation should be represented in
+structured logs.
 
 ## When to use it
 
 Use `log_invocation` primarily on public API methods.
 
-A good decorated method has independent, atomic value from the user's point of view. The caller can understand the operation without knowing the component's internal implementation.
+A good decorated method has independent, atomic value from the user's point of view. The caller can understand the
+operation without knowing the component's internal implementation.
 
 Good candidates are public methods such as:
 
@@ -151,13 +154,15 @@ close invoke
 close success
 ```
 
-That sequence speaks in public API terms. It does not force the user to learn private helper calls, parsing steps, temporary buffers, retry counters, or implementation details.
+That sequence speaks in public API terms. It does not force the user to learn private helper calls, parsing steps,
+temporary buffers, retry counters, or implementation details.
 
 ## When not to use it
 
 Do not decorate every internal helper.
 
-Private methods and small implementation steps are often not meaningful as standalone operations. Decorating them can produce noisy traces and expose internal mechanics instead of documenting the public behavior of the component.
+Private methods and small implementation steps are often not meaningful as standalone operations. Decorating them can
+produce noisy traces and expose internal mechanics instead of documenting the public behavior of the component.
 
 Usually avoid `log_invocation` for methods such as:
 
@@ -171,7 +176,8 @@ _increment_counter
 
 Those steps may be useful inside a manual diagnostic event, but they are usually not good operation boundaries.
 
-Also avoid the decorator in extremely hot paths where even structured operation logging would be too expensive or too noisy.
+Also avoid the decorator in extremely hot paths where even structured operation logging would be too expensive or too
+noisy.
 
 ## Relationship to manual logging
 
@@ -186,7 +192,8 @@ operation failed
 operation cancelled
 ```
 
-Use manual `LogContext` events for meaningful internal milestones when those milestones are useful diagnostics but are not public API operations:
+Use manual `LogContext` events for meaningful internal milestones when those milestones are useful diagnostics but are
+not public API operations:
 
 ```text
 cache miss
@@ -223,7 +230,8 @@ class Client:
         ...
 ```
 
-Usually the first positional argument is `self`, and the object implements `LogContextProviderProto` structurally by providing `get_log_context()`.
+Usually the first positional argument is `self`, and the object implements `LogContextProviderProto` structurally by
+providing `get_log_context()`.
 
 The other form passes the context explicitly:
 
@@ -241,9 +249,12 @@ def make_loader(log_context: LogContextProto):
 
 When `ctx` is passed explicitly, the decorator does not resolve the context from function arguments.
 
-If no explicit context is supplied and the first positional argument does not provide `LogContextProviderProto`, the decorator raises a runtime error.
+If no explicit context is supplied and the first positional argument does not provide `LogContextProviderProto`, the
+decorator raises a runtime error.
 
-If the first positional argument provides `LogContextProviderProto` but `get_log_context()` returns `None`, decorator-driven logging is disabled for the current call. The decorated callable is executed normally, and no `invoke`, `success`, `failed`, or `cancelled` lifecycle events are emitted.
+If the first positional argument provides `LogContextProviderProto` but `get_log_context()` returns `None`,
+decorator-driven logging is disabled for the current call. The decorated callable is executed normally, and no `invoke`,
+`success`, `failed`, or `cancelled` lifecycle events are emitted.
 
 ## Event name
 
@@ -251,6 +262,7 @@ The first decorator argument is the event name.
 
 ```python
 from mvx.common.logger import log_invocation
+
 
 @log_invocation("send_request")
 def send_request(request_id: str) -> None:
@@ -362,7 +374,8 @@ cancelled
 
 There is one important policy nuance.
 
-Before emitting the `invoke` outcome, the decorator creates `LogEventMeta` and asks the context whether the event is enabled:
+Before emitting the `invoke` outcome, the decorator creates `LogEventMeta` and asks the context whether the event is
+enabled:
 
 ```text
 create LogEventMeta
@@ -381,7 +394,7 @@ This means ordinary operation tracing can be filtered out, while exceptional out
 
 The decorator can attach an `entity_id` to `LogEventMeta`.
 
-The first positional argument may implement `LogEntityIdProviderProto` structurally by exposing an `identity` property:
+The first positional argument may implement `LogEntityIdProviderProto` structurally by exposing an `entity_id` property:
 
 ```python
 from mvx.common.logger import LogContextProto, log_invocation
@@ -396,7 +409,7 @@ class Client:
         return self._log_context
 
     @property
-    def identity(self) -> str:
+    def entity_id(self) -> str:
         return self._client_id
 
     @log_invocation("connect")
@@ -410,6 +423,7 @@ Or the decorator can receive an explicit zero-argument getter:
 from mvx.common.logger import log_invocation, configure_log_context
 
 log_context = configure_log_context("mvx.connector")
+
 
 @log_invocation(
     "connect",
@@ -463,7 +477,8 @@ This keeps accidental sensitive or large argument values out of logs unless the 
 
 `log_closures_on_invoke` allows values captured by a decorated function closure to be included in the `invoke` payload.
 
-This is useful when `log_invocation` is applied to a function rather than a method, and some useful diagnostic values are not passed as function arguments but are available from the surrounding scope.
+This is useful when `log_invocation` is applied to a function rather than a method, and some useful diagnostic values
+are not passed as function arguments but are available from the surrounding scope.
 
 For example:
 
@@ -482,12 +497,13 @@ def make_connector(log_context: LogContextProto, target: str):
 
     return connect
 ```
+
 In this example, target is not an argument of connect(). It belongs to the outer make_connector() scope.
 
 log_closures_on_invoke makes that value visible in the invoke payload under the closures key.
 
-The values are normalized before being written to the payload. If a closure value cannot be normalized, the decorator stores "<unknown>" for that key.
-
+The values are normalized before being written to the payload. If a closure value cannot be normalized, the decorator
+stores "<unknown>" for that key.
 
 ## Context fields
 
@@ -512,7 +528,9 @@ class Connection:
     async def open(self) -> None:
         self.state = "opened"
 ```
-The decorator captures the bound function arguments once, when the wrapper is called. However, context_fields are resolved again before each emitted outcome. Attribute paths are evaluated at that moment.
+
+The decorator captures the bound function arguments once, when the wrapper is called. However, context_fields are
+resolved again before each emitted outcome. Attribute paths are evaluated at that moment.
 
 In this example, state is resolved separately for invoke and success.
 
@@ -520,7 +538,8 @@ The invoke outcome is emitted before the method body runs, so it can contain sta
 
 The success outcome is emitted after the method body completes, so it can contain state="opened".
 
-This is useful for values that should appear on invoke, success, failed, and cancelled outcomes alike, but whose current value may change during the operation.
+This is useful for values that should appear on invoke, success, failed, and cancelled outcomes alike, but whose current
+value may change during the operation.
 
 A request id or message id is usually stable context. A connection state is dynamic context.
 
@@ -598,10 +617,10 @@ from mvx.common.logger import LogContextProto, log_invocation
 
 
 def format_context(
-    ctx: LogContextProto,
-    event_outcome: object,
-    event: str,
-    fields: dict[str, Any],
+        ctx: LogContextProto,
+        event_outcome: object,
+        event: str,
+        fields: dict[str, Any],
 ) -> dict[str, Any]:
     return {
         "event": event,
@@ -614,7 +633,8 @@ This is useful when selected fields need custom shaping before they become part 
 
 If the formatter raises or does not return a dictionary, the decorator falls back to normal field handling.
 
-If the formatter returns keys that conflict with system keys, the produced payload is placed under the `context` key instead of being merged directly into the top-level payload.
+If the formatter returns keys that conflict with system keys, the produced payload is placed under the `context` key
+instead of being merged directly into the top-level payload.
 
 System keys are:
 
@@ -628,7 +648,8 @@ closures
 
 ## Success payload
 
-When the wrapped operation completes successfully, `log_invocation` emits the `success` outcome if the event was enabled at invocation time.
+When the wrapped operation completes successfully, `log_invocation` emits the `success` outcome if the event was enabled
+at invocation time.
 
 By default, the success payload contains only context fields produced by `context_fields` or `context_formatter`.
 
@@ -691,11 +712,13 @@ user_id=user.id
 token.len()
 ```
 
-If no selected field can be resolved for a composite object, the result falls back to the normal value normalization behavior.
+If no selected field can be resolved for a composite object, the result falls back to the normal value normalization
+behavior.
 
 ## Failure payload
 
-When the wrapped operation raises an exception, `log_invocation` emits the `failed` outcome and then re-raises the original exception.
+When the wrapped operation raises an exception, `log_invocation` emits the `failed` outcome and then re-raises the
+original exception.
 
 The decorator does not turn domain errors into logger errors.
 
@@ -717,11 +740,13 @@ The failed payload can include an `error` field produced by the context:
 effective_ctx.build_error_payload(err)
 ```
 
-The context decides how to represent the exception. Exceptions may provide their own structured payload through `to_log_payload()`, or the context can fall back to generic error fields.
+The context decides how to represent the exception. Exceptions may provide their own structured payload through
+`to_log_payload()`, or the context can fall back to generic error fields.
 
 ## Error policy
 
-`log_error_policy` controls whether specific exception types should be logged with full error payload or suppressed error payload.
+`log_error_policy` controls whether specific exception types should be logged with full error payload or suppressed
+error payload.
 
 The type is:
 
@@ -739,9 +764,11 @@ force_log flag
 
 If `force_log` is `True`, the failed outcome includes the full `error` payload.
 
-If `force_log` is `False`, the failed outcome is emitted at `error_level_suppressed` without the detailed `error` payload.
+If `force_log` is `False`, the failed outcome is emitted at `error_level_suppressed` without the detailed `error`
+payload.
 
-This is useful when some exception classes are expected, already logged elsewhere, or too noisy for full repeated logging.
+This is useful when some exception classes are expected, already logged elsewhere, or too noisy for full repeated
+logging.
 
 ## Repeated error suppression
 
@@ -752,7 +779,8 @@ is_error_logged(err)
 mark_error_logged(err)
 ```
 
-If the same exception instance was already logged with full error details, a later failed outcome can be emitted at `error_level_suppressed` without the detailed `error` payload.
+If the same exception instance was already logged with full error details, a later failed outcome can be emitted at
+`error_level_suppressed` without the detailed `error` payload.
 
 This avoids repeating the same error body multiple times while still preserving the fact that the operation failed.
 
@@ -775,9 +803,11 @@ error = build_error_payload(cancelled_error)
 
 The event level defaults to `LogLevel.INFO`.
 
-This preserves asyncio cancellation semantics. The decorator records the outcome, but it does not swallow or convert cancellation.
+This preserves asyncio cancellation semantics. The decorator records the outcome, but it does not swallow or convert
+cancellation.
 
-If the same cancellation exception instance is already marked as logged, the decorator does not emit another `cancelled` outcome.
+If the same cancellation exception instance is already marked as logged, the decorator does not emit another `cancelled`
+outcome.
 
 ## Sync, async, and awaitable results
 
@@ -793,7 +823,8 @@ For an `async def`, the decorator awaits the function and logs the final outcome
 
 For a regular function, the decorator logs the outcome after the function returns.
 
-If a regular function returns an awaitable, the decorator wraps that awaitable so that success, failure, and cancellation are logged after the awaitable completes.
+If a regular function returns an awaitable, the decorator wraps that awaitable so that success, failure, and
+cancellation are logged after the awaitable completes.
 
 This is useful for APIs that are synchronous at the call boundary but produce asynchronous work.
 
@@ -805,6 +836,7 @@ Each outcome has its own level option:
 from mvx.common.logger import LogLevel, log_invocation, configure_log_context
 
 log_context = configure_log_context("mvx.connector")
+
 
 @log_invocation(
     "send_request",
@@ -867,7 +899,7 @@ class LdapClient:
         return self._log_context
 
     @property
-    def identity(self) -> str:
+    def entity_id(self) -> str:
         return "ldap-client"
 
     @log_invocation(
@@ -882,22 +914,24 @@ This logs the public `bind` operation lifecycle without logging the password.
 
 The method chooses exactly which input fields are safe and useful as shared context for all emitted outcomes.
 
-The context still controls event policy, payload normalization, sink delivery, and logging infrastructure error handling.
+The context still controls event policy, payload normalization, sink delivery, and logging infrastructure error
+handling.
 
 ## Design summary
 
 `log_invocation` is a user-facing logging component built on top of the core logger infrastructure.
 
-It is intended primarily for public API methods: operations that have independent, atomic value from the user's point of view.
+It is intended primarily for public API methods: operations that have independent, atomic value from the user's point of
+view.
 
 The decorated operation is the event.
 
 `invoke`, `success`, `failed`, and `cancelled` are event outcomes.
 
-The decorator records operation outcomes without changing the operation's return value, exception, or cancellation semantics.
+The decorator records operation outcomes without changing the operation's return value, exception, or cancellation
+semantics.
 
 It keeps argument logging, result logging, context data, closure data, and error-detail behavior explicit.
-
 
 ```{toctree}
 :caption: What to read next

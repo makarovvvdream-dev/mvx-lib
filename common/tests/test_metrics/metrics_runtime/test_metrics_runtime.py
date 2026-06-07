@@ -1095,7 +1095,7 @@ def test_i15_create_recorder_normalizes_recorder_id() -> None:
         recorder = runtime.create_recorder("  recorder  ")
 
         assert runtime._recorders == {"recorder": recorder}
-        assert recorder.identity == "recorder"
+        assert recorder.entity_id == "recorder"
 
     finally:
         shutdown_safely(runtime)
@@ -1109,7 +1109,7 @@ def test_i16_create_recorder_uses_recorder_id_as_default_entity_id() -> None:
 
         recorder = runtime.create_recorder("recorder")
 
-        assert recorder.identity == "recorder"
+        assert recorder.entity_id == "recorder"
 
     finally:
         shutdown_safely(runtime)
@@ -1126,7 +1126,7 @@ def test_i17_create_recorder_accepts_custom_entity_id() -> None:
             entity_id="entity",
         )
 
-        assert recorder.identity == "entity"
+        assert recorder.entity_id == "entity"
         assert runtime._recorders["recorder"] is recorder
 
     finally:
@@ -2459,7 +2459,7 @@ def test_m06_shutdown_continues_after_one_recorder_stop_failure(
 
     class BrokenStopRecorder(AsyncioMetricsRecorder):
         async def _on_stopped(self) -> None:
-            if self.identity == "broken":
+            if self.entity_id == "broken":
                 raise RuntimeError("stop failed")
 
     monkeypatch.setattr(
@@ -2692,7 +2692,7 @@ def test_n05_create_recorder_success_logs_runtime_and_nested_recorder_start(
             queue_overflow_policy=AsyncioMetricsRecorderQueueOverflowPolicy.RAISE_ERROR,
         )
 
-        assert recorder.identity == "recorder-entity"
+        assert recorder.entity_id == "recorder-entity"
 
         assert _log_pairs(memory_log_sink) == [
             ("metrics_runtime.create_recorder", "invoke"),

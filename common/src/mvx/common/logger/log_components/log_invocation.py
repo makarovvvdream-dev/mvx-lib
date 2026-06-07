@@ -41,7 +41,7 @@ def _resolve_context(args: tuple[Any, ...]) -> LogContextProto | None:
 def _resolve_entity_id(args: tuple[Any, ...]) -> str | None:
     first_arg = args[0] if args else None
     if isinstance(first_arg, LogEntityIdProviderProto):
-        return first_arg.identity
+        return first_arg.entity_id
 
     return None
 
@@ -577,7 +577,7 @@ def log_invocation(
         is disabled for the current call.
     :param entity_id_getter: optional zero-argument callable used to provide
         ``LogEventMeta.entity_id``. If omitted, the decorator tries to resolve an
-        identity from the first positional argument.
+        entity_id from the first positional argument.
     :return: a decorator that wraps the target callable.
     :raises ValueError: if ``event`` has an invalid name.
     :raises RuntimeError: if no explicit context is provided and no context

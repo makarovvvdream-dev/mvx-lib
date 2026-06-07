@@ -9,7 +9,6 @@ from ..models import LogEvent, LogEventMeta
 
 @runtime_checkable
 class LogContextProto(Protocol):
-
     def is_event_enabled(self, event: LogEventMeta) -> bool:
         """
         Return whether the event described by the given metadata is enabled.
@@ -148,9 +147,8 @@ class LogContextProviderProto(Protocol):
 
 @runtime_checkable
 class LogEntityIdProviderProto(Protocol):
-
     @property
-    def identity(self) -> str:
+    def entity_id(self) -> str:
         """
         Return the stable entity identifier for this object.
 

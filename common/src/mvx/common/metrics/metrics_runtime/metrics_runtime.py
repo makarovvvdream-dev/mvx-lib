@@ -35,6 +35,21 @@ DEFAULT_RUNTIME_SHUTDOWN_TIMEOUT_S = 5.0
 
 
 class MetricsRuntime:
+    """
+    Synchronous management layer for runtime-owned metrics recorders.
+
+    The runtime owns a dedicated thread, an asyncio event loop inside that
+    thread, and a registry of `AsyncioMetricsRecorder` instances created inside
+    that loop.
+
+    Public methods are synchronous. Operations that must run on the runtime
+    event loop are scheduled internally, and the public method waits for their
+    result.
+
+    A typical application creates one runtime for the application or for a large
+    subsystem, then creates multiple recorders inside that runtime.
+    """
+
     __slots__ = (
         "_namespace",
         "_default_recorder_queue_max_size",
@@ -59,7 +74,24 @@ class MetricsRuntime:
         default_recorder_queue_overflow_policy: AsyncioMetricsRecorderQueueOverflowPolicy = AsyncioMetricsRecorderQueueOverflowPolicy.DROP,
         log_context: LogContext | None = None,
     ) -> None:
+        """
+        Create a metrics runtime in `VIRGIN` state.
 
+        The constructor does not start the runtime thread or create the runtime
+        event loop. Call `start()` before creating recorders.
+
+        :param namespace: runtime namespace used for the runtime thread name,
+            recorder defaults, and logging identity.
+        :param default_recorder_queue_max_size: default pending-event limit for
+            recorders created by this runtime.
+        :param default_recorder_queue_overflow_policy: default overflow policy for
+            recorders created by this runtime.
+        :param log_context: optional log context used by runtime diagnostics and as
+            the default log context for created recorders.
+        :raises ValueError: if namespace is None, or if
+            default_recorder_queue_max_size is not positive.
+        :raises TypeError: if an argument has an invalid type.
+        """
         if namespace is None:
             raise ValueError("argument 'namespace' must not be None")
 
@@ -113,16 +145,21 @@ class MetricsRuntime:
 
     def get_log_context(self) -> LogContextProto | None:
         """
-        Return the log context associated with this metrics runtime.
+        Return the log context associated with this runtime.
+
+        Used by `log_invocation` decorators and passed as the default log context to
+        recorders created by this runtime when no recorder-specific context is provided.
 
         :return: runtime log context, or None when runtime logging is disabled.
         """
         return self._log_context
 
     @property
-    def identity(self) -> str:
+    def entity_id(self) -> str:
         """
-        Return the stable runtime identity used by logging.
+        Return the runtime identity used by logging.
+
+        For `MetricsRuntime`, the logging entity id is the runtime namespace.
 
         :return: runtime namespace.
         """
@@ -131,6 +168,11 @@ class MetricsRuntime:
     # ---- Runtime Lifecycle public API ------------------------------------------------------------
 
     def get_status(self) -> MetricsRuntimeState:
+        """
+        Return the current runtime lifecycle state.
+
+        :return: current runtime state.
+        """
         with self._thread_lock:
             return self._state
 
@@ -139,7 +181,23 @@ class MetricsRuntime:
         context_fields=("state=self._state",),
     )
     def start(self) -> None:
+        """
+        Start the metrics runtime.
 
+        The method creates a dedicated runtime thread, creates an asyncio event loop
+        inside that thread, waits until the loop is ready, and moves the runtime to
+        `RUNNING` state.
+
+        Calling `start()` on an already running runtime is a no-op.
+
+        :raises MetricsRuntimeInvalidStateError: if the runtime is not in `VIRGIN` state
+            and is not already running.
+        :raises MetricsRuntimeStartupError: if the runtime thread or event loop does not
+            become ready in time.
+        :raises MetricsRuntimeLoopUnavailableError: if startup finishes without an
+            available runtime event loop.
+        :return: None.
+        """
         with self._thread_lock:
             state = self._state
 
@@ -187,6 +245,22 @@ class MetricsRuntime:
         context_fields=("state=self._state",),
     )
     def shutdown(self) -> None:
+        """
+        Shut down the metrics runtime.
+
+        Shutdown stops and removes runtime-owned recorders, stops the runtime event loop,
+        joins the runtime thread, clears runtime thread/loop references, and moves the
+        runtime to `CLOSED` state.
+
+        Calling `shutdown()` on a `VIRGIN` or already closed runtime leaves it in
+        `CLOSED` state.
+
+        :raises MetricsRuntimeInvalidStateError: if shutdown is requested from an invalid state.
+        :raises MetricsRuntimeLoopUnavailableError: if the runtime is running but its loop is missing.
+        :raises MetricsRuntimeShutdownError: if recorder shutdown, event-loop shutdown, or
+            thread joining fails.
+        :return: None.
+        """
         loop: asyncio.AbstractEventLoop | None = None
         thread: threading.Thread | None = None
         should_schedule_shutdown = False
@@ -292,7 +366,30 @@ class MetricsRuntime:
         queue_overflow_policy: AsyncioMetricsRecorderQueueOverflowPolicy | None = None,
         log_context: LogContext | None = None,
     ) -> AsyncioMetricsRecorder:
+        """
+        Create, start, register, and return a recorder owned by this runtime.
 
+        The recorder is created inside the runtime event loop. The runtime starts the
+        recorder before adding it to the recorder registry. If no explicit `entity_id`
+        is provided, the normalized recorder id is used as the recorder entity id.
+
+        Recorder-specific options override runtime defaults.
+
+        :param recorder_id: recorder id used as the runtime registry key.
+        :param entity_id: optional measured entity id for the recorder.
+        :param namespace: optional recorder namespace. Defaults to the runtime namespace.
+        :param queue_max_size: optional pending-event limit for this recorder.
+        :param queue_overflow_policy: optional overflow policy for this recorder.
+        :param log_context: optional log context for this recorder. Defaults to the runtime log context.
+        :raises ValueError: if recorder_id is None or empty, or if queue_max_size is not positive.
+        :raises TypeError: if an argument has an invalid type.
+        :raises MetricsRuntimeInvalidStateError: if the runtime is not running.
+        :raises MetricsRuntimeLoopUnavailableError: if the runtime loop is unavailable.
+        :raises MetricsRuntimeRecorderAlreadyExistsError: if a recorder with this id already
+            exists or is being created.
+        :raises MetricsRuntimeRecorderStartupError: if recorder creation or startup fails.
+        :return: started recorder instance.
+        """
         normalized_recorder_id = self._ensure_recorder_id(recorder_id)
 
         if entity_id is not None:
@@ -353,7 +450,17 @@ class MetricsRuntime:
         self,
         recorder_id: str,
     ) -> AsyncioMetricsRecorder:
+        """
+        Return a recorder by id.
 
+        :param recorder_id: recorder id to look up.
+        :raises ValueError: if recorder_id is None or empty.
+        :raises TypeError: if recorder_id is not a string.
+        :raises MetricsRuntimeInvalidStateError: if the runtime is not running.
+        :raises MetricsRuntimeLoopUnavailableError: if the runtime loop is unavailable.
+        :raises MetricsRuntimeRecorderNotFoundError: if no recorder with this id exists.
+        :return: recorder registered under the given id.
+        """
         normalized_recorder_id = self._ensure_recorder_id(recorder_id)
         loop = self._get_running_loop_or_raise()
 
@@ -373,7 +480,16 @@ class MetricsRuntime:
         self,
         recorder_id: str,
     ) -> AsyncioMetricsRecorder | None:
+        """
+        Return a recorder by id, or None if it is not registered.
 
+        :param recorder_id: recorder id to look up.
+        :raises ValueError: if recorder_id is None or empty.
+        :raises TypeError: if recorder_id is not a string.
+        :raises MetricsRuntimeInvalidStateError: if the runtime is not running.
+        :raises MetricsRuntimeLoopUnavailableError: if the runtime loop is unavailable.
+        :return: recorder registered under the given id, or None.
+        """
         normalized_recorder_id = self._ensure_recorder_id(recorder_id)
         loop = self._get_running_loop_or_raise()
 
@@ -389,7 +505,13 @@ class MetricsRuntime:
         context_fields=("state=self._state",),
     )
     def list_recorder_ids(self) -> tuple[str, ...]:
+        """
+        Return ids of recorders currently registered in this runtime.
 
+        :raises MetricsRuntimeInvalidStateError: if the runtime is not running.
+        :raises MetricsRuntimeLoopUnavailableError: if the runtime loop is unavailable.
+        :return: tuple of registered recorder ids.
+        """
         loop = self._get_running_loop_or_raise()
 
         future = asyncio.run_coroutine_threadsafe(
@@ -408,7 +530,21 @@ class MetricsRuntime:
         self,
         recorder_id: str,
     ) -> None:
+        """
+        Stop a runtime-owned recorder without removing it from the registry.
 
+        If the recorder is already stopped, the method returns successfully.
+
+        :param recorder_id: recorder id to stop.
+        :raises ValueError: if recorder_id is None or empty.
+        :raises TypeError: if recorder_id is not a string.
+        :raises MetricsRuntimeInvalidStateError: if the runtime is not running.
+        :raises MetricsRuntimeLoopUnavailableError: if the runtime loop is unavailable.
+        :raises MetricsRuntimeRecorderNotFoundError: if no recorder with this id exists or
+            the recorder is being removed.
+        :raises MetricsRuntimeRecorderStopError: if the recorder cannot be stopped.
+        :return: None.
+        """
         normalized_recorder_id = self._ensure_recorder_id(recorder_id)
         loop = self._get_running_loop_or_raise()
 
@@ -428,7 +564,23 @@ class MetricsRuntime:
         self,
         recorder_id: str,
     ) -> AsyncioMetricsRecorder:
+        """
+        Stop a runtime-owned recorder and remove it from the registry.
 
+        If the recorder is running or stopping, the runtime waits for recorder stop.
+        If the recorder is already stopped, it is removed directly. The recorder is
+        removed from the registry even when recorder stop fails.
+
+        :param recorder_id: recorder id to stop and remove.
+        :raises ValueError: if recorder_id is None or empty.
+        :raises TypeError: if recorder_id is not a string.
+        :raises MetricsRuntimeInvalidStateError: if the runtime is not running.
+        :raises MetricsRuntimeLoopUnavailableError: if the runtime loop is unavailable.
+        :raises MetricsRuntimeRecorderNotFoundError: if no recorder with this id exists or
+            the recorder is already being removed.
+        :raises MetricsRuntimeRecorderStopError: if the recorder cannot be stopped.
+        :return: removed recorder instance.
+        """
         normalized_recorder_id = self._ensure_recorder_id(recorder_id)
         loop = self._get_running_loop_or_raise()
 

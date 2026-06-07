@@ -46,7 +46,10 @@ DEFAULT_NAMESPACE = "mvx.common.metrics.asyncio_metrics_recorder"
 @document_enum
 class AsyncioMetricsRecorderQueueOverflowPolicy(StrEnum):
     """
-    Queue overflow behavior for `AsyncioMetricsRecorder`.
+    Queue overflow policy for `AsyncioMetricsRecorder`.
+
+    The policy is applied when the recorder reaches its configured pending-event
+    limit.
     """
 
     #: Drop an event when the pending-event limit is reached.
@@ -62,7 +65,7 @@ DEFAULT_QUEUE_MAX_SIZE = 10_000
 @document_enum
 class AsyncioMetricsRecorderOp(StrEnum):
     """
-    Lifecycle operation names reported by `AsyncioMetricsRecorderOpResult`.
+    Lifecycle operation name reported by `AsyncioMetricsRecorderOpResult`.
     """
 
     #: Start operation.
@@ -77,6 +80,9 @@ class AsyncioMetricsRecorderOpResult:
     """
     Result of an `AsyncioMetricsRecorder` lifecycle operation.
 
+    Returned by `AsyncioMetricsRecorderWaitHandle.wait()` and by awaiting a wait
+    handle.
+
     :param op_name: lifecycle operation name.
     :param success: whether the operation completed successfully.
     :param error: operation error, or None if the operation succeeded.
@@ -89,15 +95,17 @@ class AsyncioMetricsRecorderOpResult:
 
 class AsyncioMetricsRecorderWaitHandle:
     """
-    Wait handle returned by `AsyncioMetricsRecorder.start()` and `AsyncioMetricsRecorder.stop()`.
+    Wait handle returned by `AsyncioMetricsRecorder.start()` and
+    `AsyncioMetricsRecorder.stop()`.
 
-    The handle can be used synchronously through `wait()` or awaited from async
-    code. Both forms return `AsyncioMetricsRecorderOpResult`.
+    The handle represents a scheduled lifecycle operation. It can be awaited from
+    async code or waited synchronously through `wait()`. Both forms return
+    `AsyncioMetricsRecorderOpResult`.
     """
 
     def __init__(self, operation: AsyncioMetricsRecorderOp) -> None:
         """
-        Create a wait handle for a lifecycle operation.
+        Create a wait handle for a recorder lifecycle operation.
 
         :param operation: lifecycle operation represented by this handle.
         """
@@ -106,7 +114,7 @@ class AsyncioMetricsRecorderWaitHandle:
 
     def wait(self) -> AsyncioMetricsRecorderOpResult:
         """
-        Wait synchronously for the lifecycle operation to finish.
+        Wait synchronously until the lifecycle operation completes.
 
         :return: lifecycle operation result.
         """
@@ -178,6 +186,28 @@ DEFAULT_PENDING_TASKS_CANCEL_TIMEOUT_S = 5.0
 
 
 class AsyncioMetricsRecorder:
+    """
+    Asynchronous in-memory metrics recorder.
+
+    The recorder owns registered metric instances, accepts metric events, places
+    accepted events into its internal processing buffer, dispatches events to
+    registered metrics on its owning asyncio event loop, and exposes metric
+    snapshots.
+
+    The recorder is bound to the running asyncio event loop at construction time.
+    For regular application code, recorders are usually created through
+    `MetricsRuntime`, which provides the required event-loop environment.
+
+    :param entity_id: measured entity or recorder scope identifier.
+    :param namespace: optional namespace used for recorder task names and logging.
+    :param queue_max_size: maximum number of accepted pending events.
+    :param queue_overflow_policy: policy applied when the pending-event limit is reached.
+    :param log_context: optional log context used for recorder diagnostics.
+    :raises ValueError: if entity_id is None or queue_max_size is not positive.
+    :raises TypeError: if an argument has an invalid type.
+    :raises AsyncioMetricsRecorderLoopUnavailableError: if no running asyncio event loop is available.
+    """
+
     __slots__ = (
         "_entity_id",
         "_namespace",
@@ -279,20 +309,28 @@ class AsyncioMetricsRecorder:
 
     def get_log_context(self) -> LogContextProto | None:
         """
-        Return the LoggerContextProto associated with this TcpStreamEngine instance.
-        Used by log_invocation decorators and internal helpers.
+        Return the log context associated with this recorder.
+
+        Used by `log_invocation` decorators and internal recorder diagnostics.
+
+        :return: log context, or None when recorder logging is disabled.
         """
         return self._log_context
 
     @property
-    def identity(self) -> str:
+    def entity_id(self) -> str:
+        """
+        Return the measured entity identifier associated with this recorder.
+
+        :return: recorder entity id.
+        """
         return self._entity_id
 
     # ---- Lifecycle public API ------------------------------------------------------------
 
     def get_status(self) -> AsyncioMetricsRecorderState:
         """
-        Return the current lifecycle state.
+        Return the current recorder lifecycle state.
 
         :return: current recorder state.
         """
@@ -305,11 +343,13 @@ class AsyncioMetricsRecorder:
     )
     def start(self) -> AsyncioMetricsRecorderWaitHandle:
         """
-        Start the async recorder runtime.
+        Start recorder processing.
 
-        The method schedules startup on the recorder event loop and returns immediately
-        with a wait handle. If startup is already in progress, the returned handle is
-        attached to the same startup operation.
+        The method schedules startup on the recorder's owning asyncio event loop and
+        returns immediately with a wait handle. If startup is already in progress, the
+        returned handle is attached to the same startup operation.
+
+        Startup runs the `_on_starting()` hook and starts the dispatcher task.
 
         :return: wait handle for the start operation.
         """
@@ -353,13 +393,14 @@ class AsyncioMetricsRecorder:
     )
     def stop(self) -> AsyncioMetricsRecorderWaitHandle:
         """
-        Stop the async recorder runtime.
+        Stop recorder processing.
 
-        The method schedules shutdown on the recorder event loop and returns immediately
-        with a wait handle. Stop is valid only when the recorder is running.
+        The method schedules shutdown on the recorder's owning asyncio event loop and
+        returns immediately with a wait handle. Stop is valid only when the recorder is
+        running.
 
-        Shutdown flushes accepted events on a best-effort basis, stops the dispatcher,
-        and runs the stop hook.
+        Shutdown performs a best-effort flush of accepted events, stops the dispatcher,
+        and runs the `_on_stopped()` hook.
 
         :return: wait handle for the stop operation.
         """
@@ -445,10 +486,10 @@ class AsyncioMetricsRecorder:
 
     async def _on_starting(self) -> None:
         """
-        Run backend-specific startup logic.
+        Run recorder-specific startup logic.
 
-        This hook is called before the dispatcher is started. Subclasses may override
-        it to open connections, create clients, or prepare backend resources.
+        Called before the dispatcher task is created. Subclasses may override this hook
+        to open connections, create clients, or prepare integration resources.
 
         :return: None.
         """
@@ -545,11 +586,11 @@ class AsyncioMetricsRecorder:
 
     async def _on_stopped(self) -> None:
         """
-        Run backend-specific shutdown logic.
+        Run recorder-specific shutdown logic.
 
-        This hook is called after the dispatcher has stopped during normal shutdown.
-        Subclasses may override it to close connections, clients, handlers, or other
-        backend resources.
+        Called after the dispatcher task has stopped during normal shutdown. Subclasses
+        may override this hook to close connections, clients, handlers, or other
+        integration resources.
 
         :return: None.
         """
@@ -647,7 +688,16 @@ class AsyncioMetricsRecorder:
     )
     def register_metric(self, metric: Metric) -> None:
         """
-        Register a metric in the recorder.
+        Register a metric instance in the recorder.
+
+        The metric is stored by its `metric_name` and will receive future metric events
+        during recorder dispatching.
+
+        :param metric: metric instance to register.
+        :raises ValueError: if metric is None.
+        :raises TypeError: if metric is not a `Metric` instance.
+        :raises AsyncioMetricsRecorderInvalidStateError: if the recorder state does not allow metric registration.
+        :return: None.
         """
 
         async def _register_metric_core(_metric: Metric) -> None:
@@ -700,7 +750,18 @@ class AsyncioMetricsRecorder:
 
     def register_event(self, event: MetricEvent) -> None:
         """
-        Register a metric event in the recorder.
+        Register a metric event for recorder-side processing.
+
+        The event is accepted into the recorder processing path and scheduled for
+        dispatch to registered metrics. If the recorder is still in the `VIRGIN` state,
+        event registration schedules recorder startup.
+
+        :param event: metric event to register.
+        :raises ValueError: if event is None.
+        :raises TypeError: if event is not a `MetricEvent` instance.
+        :raises AsyncioMetricsRecorderInvalidStateError: if the recorder state does not allow event registration.
+        :raises AsyncioMetricsRecorderQueueOverflowError: if the pending-event limit is reached and overflow policy is `RAISE_ERROR`.
+        :return: None.
         """
 
         if event is None:
@@ -765,6 +826,18 @@ class AsyncioMetricsRecorder:
         metric: Metric,
         event: MetricEvent,
     ) -> None:
+        """
+        Run recorder-specific logic after a metric accepts an event.
+
+        Called only when `metric.handle_event(event)` returns True. At this point the
+        metric has already updated its internal state. Subclasses may override this hook
+        to notify observers, publish changed metric state, feed probes, or connect
+        custom adapters.
+
+        :param metric: metric that accepted the event.
+        :param event: event accepted by the metric.
+        :return: None.
+        """
         pass
 
     @log_invocation(
@@ -773,7 +846,13 @@ class AsyncioMetricsRecorder:
     )
     def get_metric_snapshots(self) -> Mapping[str, Mapping[str, Any]]:
         """
-        Return snapshots of registered metrics.
+        Return snapshots of metrics registered in this recorder.
+
+        If called from the recorder's owning event loop, snapshots are collected
+        directly. Otherwise, snapshot collection is scheduled on the owning loop and the
+        caller waits for the result.
+
+        :return: mapping from metric name to metric snapshot.
         """
 
         async def _get_metric_snapshots_core() -> Mapping[str, Mapping[str, Any]]:
@@ -800,7 +879,13 @@ class AsyncioMetricsRecorder:
     )
     def iter_metrics(self) -> Iterable[Metric]:
         """
-        Iterate over registered metrics.
+        Return registered metric instances.
+
+        If called from the recorder's owning event loop, metrics are collected directly.
+        Otherwise, metric collection is scheduled on the owning loop and the caller waits
+        for the result.
+
+        :return: iterable of registered metric instances.
         """
 
         async def _iter_metrics_core() -> tuple[Metric, ...]:

@@ -28,7 +28,8 @@ failed
 cancelled
 ```
 
-The decorator does not create four different events. It creates log records for the same event name with different outcomes.
+The decorator does not create four different events. It creates log records for the same event name with different
+outcomes.
 
 ## Lifecycle shape
 
@@ -131,11 +132,15 @@ It extracts bound function arguments:
 args + kwargs -> inspect.Signature.bind(...) -> effective_kwargs
 ```
 
-Then it resolves the logging context. If `ctx` was passed to the decorator, that explicit context is used. Otherwise, the decorator expects the first positional argument to provide a context through `get_log_context()`.
+Then it resolves the logging context. If `ctx` was passed to the decorator, that explicit context is used. Otherwise,
+the decorator expects the first positional argument to provide a context through `get_log_context()`.
 
-If `get_log_context()` returns `None`, decorator-driven lifecycle logging is disabled for the current call. The decorator does not resolve `entity_id`, does not build `LogEventMeta`, does not check event policy, and does not emit `invoke`, `success`, `failed`, or `cancelled` outcomes. The wrapped operation is executed normally.
+If `get_log_context()` returns `None`, decorator-driven lifecycle logging is disabled for the current call. The
+decorator does not resolve `entity_id`, does not build `LogEventMeta`, does not check event policy, and does not emit
+`invoke`, `success`, `failed`, or `cancelled` outcomes. The wrapped operation is executed normally.
 
-Then it resolves `entity_id`. If `entity_id_getter` was passed to the decorator, that getter is used. Otherwise, the decorator checks whether the first positional argument provides an `identity` property.
+Then it resolves `entity_id`. If `entity_id_getter` was passed to the decorator, that getter is used. Otherwise, the
+decorator checks whether the first positional argument provides an `entity_id` property.
 
 Then it builds `LogEventMeta`:
 
@@ -160,13 +165,16 @@ After metadata is created, the decorator checks the context event policy:
 event_enabled = effective_ctx.is_event_enabled(event_meta)
 ```
 
-This decision controls normal operation tracing. If the event is enabled - invoke and success outcomes are emitted. Otherwise, they are suppressed.
+This decision controls normal operation tracing. If the event is enabled - invoke and success outcomes are emitted.
+Otherwise, they are suppressed.
 
 Failure and cancellation paths are still processed separately.
 
-This gives a useful behavior: ordinary operation tracing can be filtered by policy, while exceptional outcomes remain visible.
+This gives a useful behavior: ordinary operation tracing can be filtered by policy, while exceptional outcomes remain
+visible.
 
 ## Invoke outcome
+
 The `invoke` outcome is emitted before the wrapped operation body runs if the event is enabled by policy.
 
 The `invoke` payload may contain:
@@ -177,9 +185,11 @@ context fields
 selected arguments under kwargs
 ```
 
-The decorator emits it with the level specified in the decorator call argument `invoke_level`. The default level is `LogLevel.DEBUG`.
+The decorator emits it with the level specified in the decorator call argument `invoke_level`. The default level is
+`LogLevel.DEBUG`.
 
-Because `invoke` is emitted before the operation body runs, context fields that read mutable object state show the state before the operation.
+Because `invoke` is emitted before the operation body runs, context fields that read mutable object state show the state
+before the operation.
 
 For example, an `open()` operation may emit:
 
@@ -191,7 +201,8 @@ payload.state  = "closed"
 
 ## Success outcome
 
-The `success` outcome is emitted after the wrapped operation completes successfully. It is emitted only if `event_enabled` was `True` before the operation started.
+The `success` outcome is emitted after the wrapped operation completes successfully. It is emitted only if
+`event_enabled` was `True` before the operation started.
 
 The `success` payload may contain:
 
@@ -200,7 +211,8 @@ context fields
 result, if log_result_on_success is not None
 ```
 
-The decorator emits it with the level specified in the decorator call argument `success_level`. The default level is `LogLevel.DEBUG`.
+The decorator emits it with the level specified in the decorator call argument `success_level`. The default level is
+`LogLevel.DEBUG`.
 
 The original result is returned unchanged.
 
@@ -208,7 +220,8 @@ The original result is returned unchanged.
 operation result -> success logging -> same result returned
 ```
 
-Because `success` is emitted after the operation body completes, dynamic context fields may reflect the final state of the operation.
+Because `success` is emitted after the operation body completes, dynamic context fields may reflect the final state of
+the operation.
 
 For example, the same `open()` operation may emit:
 
@@ -247,7 +260,9 @@ The error payload is built through the resolved context:
 effective_ctx.build_error_payload(err)
 ```
 
-The decorator emits it with the level specified in the decorator call argument `error_level` or `error_level_suppressed`. The default full error level is `LogLevel.ERROR`. The default suppressed error level is `LogLevel.DEBUG`.
+The decorator emits it with the level specified in the decorator call argument `error_level` or
+`error_level_suppressed`. The default full error level is `LogLevel.ERROR`. The default suppressed error level is
+`LogLevel.DEBUG`.
 
 The original exception is not converted into a logger exception.
 
@@ -278,9 +293,11 @@ error     = build_error_payload(cancelled_error)
 
 It may also contain context fields.
 
-The decorator emits it with the level specified in the decorator call argument `cancel_level`. The default level is `LogLevel.INFO`.
+The decorator emits it with the level specified in the decorator call argument `cancel_level`. The default level is
+`LogLevel.INFO`.
 
-If the same cancellation exception instance is already marked as logged, the decorator does not emit another `cancelled` outcome.
+If the same cancellation exception instance is already marked as logged, the decorator does not emit another `cancelled`
+outcome.
 
 ## Outcome ordering
 
@@ -310,13 +327,15 @@ failure path:    no invoke -> failed
 cancelled path:  no invoke -> cancelled
 ```
 
-This behavior is intentional. Event policy controls regular operation tracing. Error and cancellation outcomes still pass through their dedicated paths.
+This behavior is intentional. Event policy controls regular operation tracing. Error and cancellation outcomes still
+pass through their dedicated paths.
 
 ## Context fields during lifecycle
 
 `context_fields` are resolved separately for each emitted outcome.
 
-The decorator captures bound function arguments once at the beginning of the wrapper call. However, field paths are evaluated again when each outcome is being emitted.
+The decorator captures bound function arguments once at the beginning of the wrapper call. However, field paths are
+evaluated again when each outcome is being emitted.
 
 This means context fields can reflect state changes made by the operation.
 
@@ -412,7 +431,9 @@ re-raise cancellation
 
 ## Synchronous functions returning awaitables
 
-A synchronous function may return an awaitable. In that case, the decorator does not emit success immediately after the synchronous call returns the awaitable. Instead, it wraps the awaitable and logs the final outcome when the awaitable completes.
+A synchronous function may return an awaitable. In that case, the decorator does not emit success immediately after the
+synchronous call returns the awaitable. Instead, it wraps the awaitable and logs the final outcome when the awaitable
+completes.
 
 The shape is:
 
@@ -430,7 +451,8 @@ await original awaitable
    +--> cancelled  -> emit cancelled, re-raise cancellation
 ```
 
-This preserves correct lifecycle logging for APIs that are synchronous at the call boundary but produce asynchronous work.
+This preserves correct lifecycle logging for APIs that are synchronous at the call boundary but produce asynchronous
+work.
 
 ## Error payload and repeated errors
 
@@ -438,7 +460,8 @@ For failures, the decorator decides whether to log a full error payload or a sup
 
 If `log_error_policy` matches the exception type, that rule is applied.
 
-If no policy rule applies and the exception is not already marked as logged, the decorator emits a full failed outcome and marks the exception as logged.
+If no policy rule applies and the exception is not already marked as logged, the decorator emits a full failed outcome
+and marks the exception as logged.
 
 If the exception is already marked as logged, the decorator emits a suppressed failed outcome.
 
@@ -448,7 +471,8 @@ The full failed outcome includes:
 error = effective_ctx.build_error_payload(err)
 ```
 
-The suppressed failed outcome omits the detailed `error` payload and uses level, defined in `error_level_suppressed` argument.
+The suppressed failed outcome omits the detailed `error` payload and uses level, defined in `error_level_suppressed`
+argument.
 
 The original exception is always re-raised.
 

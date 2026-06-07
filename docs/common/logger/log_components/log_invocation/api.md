@@ -24,9 +24,11 @@ from mvx.common.logger import (
 
 `log_invocation` is a decorator factory.
 
-It creates a decorator that wraps a public API operation and emits structured lifecycle outcomes through a resolved logging context.
+It creates a decorator that wraps a public API operation and emits structured lifecycle outcomes through a resolved
+logging context.
 
-The decorated operation is treated as one event. The operation lifecycle is represented through `event_outcome` values such as `invoke`, `success`, `failed`, and `cancelled`.
+The decorated operation is treated as one event. The operation lifecycle is represented through `event_outcome` values
+such as `invoke`, `success`, `failed`, and `cancelled`.
 
 ```{eval-rst}
 .. autofunction:: mvx.common.logger.log_invocation
@@ -38,7 +40,8 @@ The decorated operation is treated as one event. The operation lifecycle is repr
 
 Instead, it works with a context-like object that satisfies `LogContextProto`.
 
-This allows the decorator to be used with `LogContext` itself or with another object that exposes the minimal behavior required by the decorator.
+This allows the decorator to be used with `LogContext` itself or with another object that exposes the minimal behavior
+required by the decorator.
 
 ```{eval-rst}
 .. autoclass:: mvx.common.logger.LogContextProto
@@ -85,7 +88,7 @@ The object must satisfy `LogEntityIdProviderProto`:
 Conceptually:
 
 ```text
-self -> identity -> LogEventMeta.entity_id
+self -> entity_id -> LogEventMeta.entity_id
 ```
 
 If the decorator receives an explicit `entity_id_getter`, that getter is used instead.

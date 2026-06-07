@@ -290,7 +290,7 @@ def make_domain_error() -> AsyncioMetricsRecorderError:
 async def test_a01_constructor_inside_running_loop_creates_virgin_recorder() -> None:
     recorder = RecordingMetricsRecorder(entity_id="recorder-1")
 
-    assert recorder.identity == "recorder-1"
+    assert recorder.entity_id == "recorder-1"
     assert recorder.get_status() is AsyncioMetricsRecorderState.VIRGIN
     assert recorder._dispatcher is None
     assert recorder._pending_counter == 0
@@ -307,14 +307,14 @@ def test_a02_constructor_outside_running_loop_fails() -> None:
 async def test_a03_constructor_strips_entity_id() -> None:
     recorder = RecordingMetricsRecorder(entity_id="  recorder-1  ")
 
-    assert recorder.identity == "recorder-1"
+    assert recorder.entity_id == "recorder-1"
 
 
 @pytest.mark.asyncio
 async def test_a04_constructor_generates_entity_id_when_blank() -> None:
     recorder = RecordingMetricsRecorder(entity_id="   ")
 
-    assert recorder.identity
+    assert recorder.entity_id
 
 
 @pytest.mark.asyncio
