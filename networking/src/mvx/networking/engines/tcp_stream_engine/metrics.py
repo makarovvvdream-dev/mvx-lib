@@ -1,755 +1,730 @@
-# src/mvx/networking/engines/tcp_stream_engine/tcp_stream_engine.py
+# src/mvx/networking/engines/tcp_stream_engine/metrics.py
 from __future__ import annotations
 
 from typing import Any, Mapping
-from dataclasses import dataclass
-from enum import StrEnum
 
-from ...metrics import Metric, MetricEvent, MetricsRecorderProto
+from mvx.common.metrics import Metric, MetricEvent
+
+from .metric_events import (
+    TcpStreamCloseMetricEvent,
+    TcpStreamCloseResult,
+    TcpStreamCryptoCodecAttachMetricEvent,
+    TcpStreamCryptoCodecAttachResult,
+    TcpStreamCryptoCodecDetachMetricEvent,
+    TcpStreamCryptoCodecDetachResult,
+    TcpStreamDrainMetricEvent,
+    TcpStreamDrainResult,
+    TcpStreamOpenMetricEvent,
+    TcpStreamOpenResult,
+    TcpStreamStartTlsMetricEvent,
+    TcpStreamStartTlsResult,
+    TcpStreamStreamReadMetricEvent,
+    TcpStreamStreamReadResult,
+    TcpStreamStreamWriteMetricEvent,
+    TcpStreamStreamWriteResult,
+)
 
 __all__ = (
-    "TcpStreamOpenAttemptOutcome",
-    "TcpStreamOpenAttemptMetricEvent",
-    "TcpStreamOpenAttemptsMetric",
-    "TcpStreamCloseAttemptOutcome",
-    "TcpStreamCloseAttemptMetricEvent",
-    "TcpStreamCloseAttemptsMetric",
-    "TcpStreamStartTlsAttemptOutcome",
-    "TcpStreamStartTlsAttemptMetricEvent",
-    "TcpStreamStartTlsAttemptsMetric",
-    "TcpStreamCryptoCodecAttachAttemptOutcome",
-    "TcpStreamCryptoCodecAttachAttemptMetricEvent",
-    "TcpStreamCryptoCodecAttachAttemptsMetric",
-    "TcpStreamCryptoCodecDetachAttemptOutcome",
-    "TcpStreamCryptoCodecDetachAttemptMetricEvent",
-    "TcpStreamCryptoCodecDetachAttemptsMetric",
-    "TcpStreamStreamReadAttemptOutcome",
-    "TcpStreamStreamReadAttemptMetricEvent",
-    "TcpStreamStreamReadAttemptsMetric",
-    "TcpStreamStreamWriteAttemptOutcome",
-    "TcpStreamStreamWriteAttemptMetricEvent",
-    "TcpStreamStreamWriteAttemptsMetric",
-    "TcpStreamDrainAttemptOutcome",
-    "TcpStreamDrainAttemptMetricEvent",
-    "TcpStreamDrainAttemptsMetric",
-    "TcpStreamBytesReceivedMetricEvent",
-    "TcpStreamBytesReceivedMetric",
-    "TcpStreamBytesSentMetricEvent",
-    "TcpStreamBytesSentMetric",
-    "TcpStreamRemoteDisconnectMetricEvent",
+    "TcpStreamOperationAttemptsMetric",
+    "TcpStreamOperationLatencyMetric",
+    "TcpStreamIoBytesMetric",
     "TcpStreamRemoteDisconnectMetric",
-    "TcpStreamAbortiveCloseMetricEvent",
     "TcpStreamAbortiveCloseMetric",
-    "MetricEvent",
-    "MetricsRecorderProto",
 )
 
 
-# ---- Open attempts metric ----------------------------------------------------------------
+def _average_or_zero(*, total: int, count: int) -> int:
+    if count == 0:
+        return 0
 
-# tcp_stream.open.attempts_total
-# tcp_stream.open.success_total
-# tcp_stream.open.already_opened_total
-# tcp_stream.open.failure_total
-# tcp_stream.open.cancelled_total
+    return total // count
 
 
-class TcpStreamOpenAttemptOutcome(StrEnum):
-    SUCCESS = "SUCCESS"
-    ALREADY_OPENED = "ALREADY_OPENED"
-    FAILURE = "FAILURE"
-    CANCELLED = "CANCELLED"
+# ---- Operation attempts metric -----------------------------------------------------------
+#
+# Metric:
+#   tcp_stream.operation.attempts
+#
+# Dimensions:
+#   open_total
+#   open_success_total
+#   open_already_opened_total
+#   open_failure_total
+#   open_cancelled_total
+#   open_plain_success_total
+#   open_ssl_success_total
+#
+#   close_total
+#   close_success_total
+#   close_not_opened_total
+#   close_failure_total
+#   close_cancelled_total
+#
+#   start_tls_total
+#   start_tls_success_total
+#   start_tls_failure_total
+#   start_tls_cancelled_total
+#   start_tls_timeout_total
+#   start_tls_refused_not_opened_total
+#   start_tls_refused_already_under_ssl_total
+#   start_tls_refused_start_tls_already_active_total
+#   start_tls_refused_crypto_codec_attached_total
+#   start_tls_tls_error_total
+#
+#   crypto_codec_attach_total
+#   crypto_codec_attach_success_total
+#   crypto_codec_attach_failure_total
+#   crypto_codec_attach_cancelled_total
+#   crypto_codec_attach_refused_not_opened_total
+#   crypto_codec_attach_refused_already_under_ssl_total
+#   crypto_codec_attach_refused_start_tls_active_total
+#   crypto_codec_attach_refused_already_attached_total
+#
+#   crypto_codec_detach_total
+#   crypto_codec_detach_success_total
+#   crypto_codec_detach_failure_total
+#   crypto_codec_detach_cancelled_total
+#   crypto_codec_detach_refused_not_opened_total
+#   crypto_codec_detach_refused_not_attached_total
+#
+#   stream_read_total
+#   stream_read_success_total
+#   stream_read_timeout_total
+#   stream_read_error_total
+#   stream_read_cancelled_total
+#   stream_read_tls_error_total
+#   stream_read_remote_disconnect_total
+#
+#   stream_write_total
+#   stream_write_success_total
+#   stream_write_error_total
+#   stream_write_tls_error_total
+#
+#   drain_total
+#   drain_success_total
+#   drain_timeout_total
+#   drain_error_total
+#   drain_cancelled_total
+#   drain_tls_error_total
 
 
-@dataclass(frozen=True, slots=True)
-class TcpStreamOpenAttemptMetricEvent(MetricEvent):
-    use_ssl: bool
-    outcome: TcpStreamOpenAttemptOutcome
-
-    @property
-    def event_type(self) -> str:
-        return "tcp_stream.open.attempt"
-
-
-class TcpStreamOpenAttemptsMetric(Metric):
+class TcpStreamOperationAttemptsMetric(Metric):
     def __init__(self) -> None:
-        self._total = 0
-        self._success_total = 0
-        self._already_opened_total = 0
-        self._failure_total = 0
-        self._cancelled_total = 0
+        self._open_total = 0
+        self._open_success_total = 0
+        self._open_already_opened_total = 0
+        self._open_failure_total = 0
+        self._open_cancelled_total = 0
+        self._open_plain_success_total = 0
+        self._open_ssl_success_total = 0
+
+        self._close_total = 0
+        self._close_success_total = 0
+        self._close_not_opened_total = 0
+        self._close_failure_total = 0
+        self._close_cancelled_total = 0
+
+        self._start_tls_total = 0
+        self._start_tls_success_total = 0
+        self._start_tls_failure_total = 0
+        self._start_tls_cancelled_total = 0
+        self._start_tls_timeout_total = 0
+        self._start_tls_refused_not_opened_total = 0
+        self._start_tls_refused_already_under_ssl_total = 0
+        self._start_tls_refused_start_tls_already_active_total = 0
+        self._start_tls_refused_crypto_codec_attached_total = 0
+        self._start_tls_tls_error_total = 0
+
+        self._crypto_codec_attach_total = 0
+        self._crypto_codec_attach_success_total = 0
+        self._crypto_codec_attach_failure_total = 0
+        self._crypto_codec_attach_cancelled_total = 0
+        self._crypto_codec_attach_refused_not_opened_total = 0
+        self._crypto_codec_attach_refused_already_under_ssl_total = 0
+        self._crypto_codec_attach_refused_start_tls_active_total = 0
+        self._crypto_codec_attach_refused_already_attached_total = 0
+
+        self._crypto_codec_detach_total = 0
+        self._crypto_codec_detach_success_total = 0
+        self._crypto_codec_detach_failure_total = 0
+        self._crypto_codec_detach_cancelled_total = 0
+        self._crypto_codec_detach_refused_not_opened_total = 0
+        self._crypto_codec_detach_refused_not_attached_total = 0
+
+        self._stream_read_total = 0
+        self._stream_read_success_total = 0
+        self._stream_read_timeout_total = 0
+        self._stream_read_error_total = 0
+        self._stream_read_cancelled_total = 0
+        self._stream_read_tls_error_total = 0
+        self._stream_read_remote_disconnect_total = 0
+
+        self._stream_write_total = 0
+        self._stream_write_success_total = 0
+        self._stream_write_error_total = 0
+        self._stream_write_tls_error_total = 0
+
+        self._drain_total = 0
+        self._drain_success_total = 0
+        self._drain_timeout_total = 0
+        self._drain_error_total = 0
+        self._drain_cancelled_total = 0
+        self._drain_tls_error_total = 0
 
     @property
     def metric_name(self) -> str:
-        return "tcp_stream.open.attempts"
+        return "tcp_stream.operation.attempts"
 
     def handle_event(self, event: MetricEvent) -> bool:
-        if not isinstance(event, TcpStreamOpenAttemptMetricEvent):
-            return False
+        if isinstance(event, TcpStreamOpenMetricEvent):
+            self._handle_open_event(event)
+            return True
 
-        self._total += 1
+        if isinstance(event, TcpStreamCloseMetricEvent):
+            self._handle_close_event(event)
+            return True
 
-        if event.outcome is TcpStreamOpenAttemptOutcome.SUCCESS:
-            self._success_total += 1
+        if isinstance(event, TcpStreamStartTlsMetricEvent):
+            self._handle_start_tls_event(event)
+            return True
 
-        elif event.outcome is TcpStreamOpenAttemptOutcome.ALREADY_OPENED:
-            self._already_opened_total += 1
+        if isinstance(event, TcpStreamCryptoCodecAttachMetricEvent):
+            self._handle_crypto_codec_attach_event(event)
+            return True
 
-        elif event.outcome is TcpStreamOpenAttemptOutcome.FAILURE:
-            self._failure_total += 1
+        if isinstance(event, TcpStreamCryptoCodecDetachMetricEvent):
+            self._handle_crypto_codec_detach_event(event)
+            return True
 
-        elif event.outcome is TcpStreamOpenAttemptOutcome.CANCELLED:
-            self._cancelled_total += 1
+        if isinstance(event, TcpStreamStreamReadMetricEvent):
+            self._handle_stream_read_event(event)
+            return True
 
-        return True
+        if isinstance(event, TcpStreamStreamWriteMetricEvent):
+            self._handle_stream_write_event(event)
+            return True
+
+        if isinstance(event, TcpStreamDrainMetricEvent):
+            self._handle_drain_event(event)
+            return True
+
+        return False
+
+    def _handle_open_event(self, event: TcpStreamOpenMetricEvent) -> None:
+        self._open_total += 1
+
+        if event.result is TcpStreamOpenResult.SUCCEEDED:
+            self._open_success_total += 1
+
+            if event.use_ssl:
+                self._open_ssl_success_total += 1
+            else:
+                self._open_plain_success_total += 1
+
+        elif event.result is TcpStreamOpenResult.ALREADY_OPENED:
+            self._open_already_opened_total += 1
+
+        elif event.result is TcpStreamOpenResult.FAILED:
+            self._open_failure_total += 1
+
+        elif event.result is TcpStreamOpenResult.CANCELLED:
+            self._open_cancelled_total += 1
+
+    def _handle_close_event(self, event: TcpStreamCloseMetricEvent) -> None:
+        self._close_total += 1
+
+        if event.result is TcpStreamCloseResult.SUCCEEDED:
+            self._close_success_total += 1
+
+        elif event.result is TcpStreamCloseResult.NOT_OPENED:
+            self._close_not_opened_total += 1
+
+        elif event.result is TcpStreamCloseResult.FAILED:
+            self._close_failure_total += 1
+
+        elif event.result is TcpStreamCloseResult.CANCELLED:
+            self._close_cancelled_total += 1
+
+    def _handle_start_tls_event(self, event: TcpStreamStartTlsMetricEvent) -> None:
+        self._start_tls_total += 1
+
+        if event.result is TcpStreamStartTlsResult.SUCCEEDED:
+            self._start_tls_success_total += 1
+
+        elif event.result is TcpStreamStartTlsResult.FAILED:
+            self._start_tls_failure_total += 1
+
+        elif event.result is TcpStreamStartTlsResult.CANCELLED:
+            self._start_tls_cancelled_total += 1
+
+        elif event.result is TcpStreamStartTlsResult.TIMED_OUT:
+            self._start_tls_timeout_total += 1
+
+        elif event.result is TcpStreamStartTlsResult.REFUSED_NOT_OPENED:
+            self._start_tls_refused_not_opened_total += 1
+
+        elif event.result is TcpStreamStartTlsResult.REFUSED_ALREADY_UNDER_SSL:
+            self._start_tls_refused_already_under_ssl_total += 1
+
+        elif event.result is TcpStreamStartTlsResult.REFUSED_START_TLS_ALREADY_ACTIVE:
+            self._start_tls_refused_start_tls_already_active_total += 1
+
+        elif event.result is TcpStreamStartTlsResult.REFUSED_CRYPTO_CODEC_ATTACHED:
+            self._start_tls_refused_crypto_codec_attached_total += 1
+
+        elif event.result is TcpStreamStartTlsResult.TLS_FAILED:
+            self._start_tls_tls_error_total += 1
+
+    def _handle_crypto_codec_attach_event(
+        self,
+        event: TcpStreamCryptoCodecAttachMetricEvent,
+    ) -> None:
+        self._crypto_codec_attach_total += 1
+
+        if event.result is TcpStreamCryptoCodecAttachResult.SUCCEEDED:
+            self._crypto_codec_attach_success_total += 1
+
+        elif event.result is TcpStreamCryptoCodecAttachResult.FAILED:
+            self._crypto_codec_attach_failure_total += 1
+
+        elif event.result is TcpStreamCryptoCodecAttachResult.CANCELLED:
+            self._crypto_codec_attach_cancelled_total += 1
+
+        elif event.result is TcpStreamCryptoCodecAttachResult.REFUSED_NOT_OPENED:
+            self._crypto_codec_attach_refused_not_opened_total += 1
+
+        elif event.result is TcpStreamCryptoCodecAttachResult.REFUSED_ALREADY_UNDER_SSL:
+            self._crypto_codec_attach_refused_already_under_ssl_total += 1
+
+        elif event.result is TcpStreamCryptoCodecAttachResult.REFUSED_START_TLS_ACTIVE:
+            self._crypto_codec_attach_refused_start_tls_active_total += 1
+
+        elif event.result is TcpStreamCryptoCodecAttachResult.REFUSED_ALREADY_ATTACHED:
+            self._crypto_codec_attach_refused_already_attached_total += 1
+
+    def _handle_crypto_codec_detach_event(
+        self,
+        event: TcpStreamCryptoCodecDetachMetricEvent,
+    ) -> None:
+        self._crypto_codec_detach_total += 1
+
+        if event.result is TcpStreamCryptoCodecDetachResult.SUCCEEDED:
+            self._crypto_codec_detach_success_total += 1
+
+        elif event.result is TcpStreamCryptoCodecDetachResult.FAILED:
+            self._crypto_codec_detach_failure_total += 1
+
+        elif event.result is TcpStreamCryptoCodecDetachResult.CANCELLED:
+            self._crypto_codec_detach_cancelled_total += 1
+
+        elif event.result is TcpStreamCryptoCodecDetachResult.REFUSED_NOT_OPENED:
+            self._crypto_codec_detach_refused_not_opened_total += 1
+
+        elif event.result is TcpStreamCryptoCodecDetachResult.REFUSED_NOT_ATTACHED:
+            self._crypto_codec_detach_refused_not_attached_total += 1
+
+    def _handle_stream_read_event(self, event: TcpStreamStreamReadMetricEvent) -> None:
+        self._stream_read_total += 1
+
+        if event.result is TcpStreamStreamReadResult.SUCCEEDED:
+            self._stream_read_success_total += 1
+
+        elif event.result is TcpStreamStreamReadResult.TIMED_OUT:
+            self._stream_read_timeout_total += 1
+
+        elif event.result is TcpStreamStreamReadResult.FAILED:
+            self._stream_read_error_total += 1
+
+        elif event.result is TcpStreamStreamReadResult.CANCELLED:
+            self._stream_read_cancelled_total += 1
+
+        elif event.result is TcpStreamStreamReadResult.TLS_FAILED:
+            self._stream_read_tls_error_total += 1
+
+        elif event.result is TcpStreamStreamReadResult.REMOTE_DISCONNECTED:
+            self._stream_read_remote_disconnect_total += 1
+
+    def _handle_stream_write_event(self, event: TcpStreamStreamWriteMetricEvent) -> None:
+        self._stream_write_total += 1
+
+        if event.result is TcpStreamStreamWriteResult.SUCCEEDED:
+            self._stream_write_success_total += 1
+
+        elif event.result is TcpStreamStreamWriteResult.FAILED:
+            self._stream_write_error_total += 1
+
+        elif event.result is TcpStreamStreamWriteResult.TLS_FAILED:
+            self._stream_write_tls_error_total += 1
+
+    def _handle_drain_event(self, event: TcpStreamDrainMetricEvent) -> None:
+        self._drain_total += 1
+
+        if event.result is TcpStreamDrainResult.SUCCEEDED:
+            self._drain_success_total += 1
+
+        elif event.result is TcpStreamDrainResult.TIMED_OUT:
+            self._drain_timeout_total += 1
+
+        elif event.result is TcpStreamDrainResult.FAILED:
+            self._drain_error_total += 1
+
+        elif event.result is TcpStreamDrainResult.CANCELLED:
+            self._drain_cancelled_total += 1
+
+        elif event.result is TcpStreamDrainResult.TLS_FAILED:
+            self._drain_tls_error_total += 1
 
     def snapshot(self) -> Mapping[str, Any]:
         return {
             "name": self.metric_name,
             "dimensions": {
-                "total": self._total,
-                "success_total": self._success_total,
-                "already_opened_total": self._already_opened_total,
-                "failure_total": self._failure_total,
-                "cancelled_total": self._cancelled_total,
-            },
-        }
-
-
-# ---- Close attempts metric ---------------------------------------------------------------
-
-# tcp_stream.close.attempts_total
-# tcp_stream.close.success_total
-# tcp_stream.close.not_opened_total
-# tcp_stream.close.failure_total
-# tcp_stream.close.cancelled_total
-
-
-class TcpStreamCloseAttemptOutcome(StrEnum):
-    SUCCESS = "SUCCESS"
-    NOT_OPENED = "NOT_OPENED"
-    FAILURE = "FAILURE"
-    CANCELLED = "CANCELLED"
-
-
-@dataclass(frozen=True, slots=True)
-class TcpStreamCloseAttemptMetricEvent(MetricEvent):
-    outcome: TcpStreamCloseAttemptOutcome
-
-    @property
-    def event_type(self) -> str:
-        return "tcp_stream.close.attempt"
-
-
-class TcpStreamCloseAttemptsMetric(Metric):
-    def __init__(self) -> None:
-        self._total = 0
-        self._success_total = 0
-        self._not_opened_total = 0
-        self._failure_total = 0
-        self._cancelled_total = 0
-
-    @property
-    def metric_name(self) -> str:
-        return "tcp_stream.close.attempts"
-
-    def handle_event(self, event: MetricEvent) -> bool:
-        if not isinstance(event, TcpStreamCloseAttemptMetricEvent):
-            return False
-
-        self._total += 1
-
-        if event.outcome is TcpStreamCloseAttemptOutcome.SUCCESS:
-            self._success_total += 1
-
-        elif event.outcome is TcpStreamCloseAttemptOutcome.NOT_OPENED:
-            self._not_opened_total += 1
-
-        elif event.outcome is TcpStreamCloseAttemptOutcome.FAILURE:
-            self._failure_total += 1
-
-        elif event.outcome is TcpStreamCloseAttemptOutcome.CANCELLED:
-            self._cancelled_total += 1
-
-        return True
-
-    def snapshot(self) -> Mapping[str, Any]:
-        return {
-            "name": self.metric_name,
-            "dimensions": {
-                "total": self._total,
-                "success_total": self._success_total,
-                "not_opened_total": self._not_opened_total,
-                "failure_total": self._failure_total,
-                "cancelled_total": self._cancelled_total,
-            },
-        }
-
-
-# ---- Start TLS metric --------------------------------------------------------------------
-
-# tcp_stream.start_tls.attempts_total
-# tcp_stream.start_tls.success_total
-# tcp_stream.start_tls.failure_total
-# tcp_stream.start_tls.cancelled_total
-# tcp_stream.start_tls.timeout_total
-# tcp_stream.start_tls.refused_not_opened_total
-# tcp_stream.start_tls.refused_already_under_ssl_total
-# tcp_stream.start_tls.refused_start_tls_already_active_total
-# tcp_stream.start_tls.refused_crypto_codec_attached_total
-# tcp_stream.start_tls.tls_error_total
-
-
-class TcpStreamStartTlsAttemptOutcome(StrEnum):
-    SUCCESS = "SUCCESS"
-    FAILURE = "FAILURE"
-    CANCELLED = "CANCELLED"
-    TIMEOUT = "TIMEOUT"
-    REFUSED_NOT_OPENED = "REFUSED_NOT_OPENED"
-    REFUSED_ALREADY_UNDER_SSL = "REFUSED_ALREADY_UNDER_SSL"
-    REFUSED_START_TLS_ALREADY_ACTIVE = "REFUSED_START_TLS_ALREADY_ACTIVE"
-    REFUSED_CRYPTO_CODEC_ATTACHED = "REFUSED_CRYPTO_CODEC_ATTACHED"
-    TLS_ERROR = "TLS_ERROR"
-
-
-@dataclass(frozen=True, slots=True)
-class TcpStreamStartTlsAttemptMetricEvent(MetricEvent):
-    outcome: TcpStreamStartTlsAttemptOutcome
-
-    @property
-    def event_type(self) -> str:
-        return "tcp_stream.start_tls.attempt"
-
-
-class TcpStreamStartTlsAttemptsMetric(Metric):
-    def __init__(self) -> None:
-        self._total = 0
-        self._success_total = 0
-        self._failure_total = 0
-        self._cancelled_total = 0
-        self._timeout_total = 0
-        self._refused_not_opened_total = 0
-        self._refused_already_under_ssl_total = 0
-        self._refused_start_tls_already_active_total = 0
-        self._refused_crypto_codec_attached_total = 0
-        self._tls_error_total = 0
-
-    @property
-    def metric_name(self) -> str:
-        return "tcp_stream.start_tls.attempts"
-
-    def handle_event(self, event: MetricEvent) -> bool:
-        if not isinstance(event, TcpStreamStartTlsAttemptMetricEvent):
-            return False
-
-        self._total += 1
-
-        if event.outcome is TcpStreamStartTlsAttemptOutcome.SUCCESS:
-            self._success_total += 1
-
-        elif event.outcome is TcpStreamStartTlsAttemptOutcome.FAILURE:
-            self._failure_total += 1
-
-        elif event.outcome is TcpStreamStartTlsAttemptOutcome.CANCELLED:
-            self._cancelled_total += 1
-
-        elif event.outcome is TcpStreamStartTlsAttemptOutcome.TIMEOUT:
-            self._timeout_total += 1
-
-        elif event.outcome is TcpStreamStartTlsAttemptOutcome.REFUSED_NOT_OPENED:
-            self._refused_not_opened_total += 1
-
-        elif event.outcome is TcpStreamStartTlsAttemptOutcome.REFUSED_ALREADY_UNDER_SSL:
-            self._refused_already_under_ssl_total += 1
-
-        elif event.outcome is TcpStreamStartTlsAttemptOutcome.REFUSED_START_TLS_ALREADY_ACTIVE:
-            self._refused_start_tls_already_active_total += 1
-
-        elif event.outcome is TcpStreamStartTlsAttemptOutcome.REFUSED_CRYPTO_CODEC_ATTACHED:
-            self._refused_crypto_codec_attached_total += 1
-
-        elif event.outcome is TcpStreamStartTlsAttemptOutcome.TLS_ERROR:
-            self._tls_error_total += 1
-
-        return True
-
-    def snapshot(self) -> Mapping[str, Any]:
-        return {
-            "name": self.metric_name,
-            "dimensions": {
-                "total": self._total,
-                "success_total": self._success_total,
-                "failure_total": self._failure_total,
-                "cancelled_total": self._cancelled_total,
-                "timeout_total": self._timeout_total,
-                "refused_not_opened_total": self._refused_not_opened_total,
-                "refused_already_under_ssl_total": self._refused_already_under_ssl_total,
-                "refused_start_tls_already_active_total": (
-                    self._refused_start_tls_already_active_total
+                "open_total": self._open_total,
+                "open_success_total": self._open_success_total,
+                "open_already_opened_total": self._open_already_opened_total,
+                "open_failure_total": self._open_failure_total,
+                "open_cancelled_total": self._open_cancelled_total,
+                "open_plain_success_total": self._open_plain_success_total,
+                "open_ssl_success_total": self._open_ssl_success_total,
+                "close_total": self._close_total,
+                "close_success_total": self._close_success_total,
+                "close_not_opened_total": self._close_not_opened_total,
+                "close_failure_total": self._close_failure_total,
+                "close_cancelled_total": self._close_cancelled_total,
+                "start_tls_total": self._start_tls_total,
+                "start_tls_success_total": self._start_tls_success_total,
+                "start_tls_failure_total": self._start_tls_failure_total,
+                "start_tls_cancelled_total": self._start_tls_cancelled_total,
+                "start_tls_timeout_total": self._start_tls_timeout_total,
+                "start_tls_refused_not_opened_total": self._start_tls_refused_not_opened_total,
+                "start_tls_refused_already_under_ssl_total": (
+                    self._start_tls_refused_already_under_ssl_total
                 ),
-                "refused_crypto_codec_attached_total": self._refused_crypto_codec_attached_total,
-                "tls_error_total": self._tls_error_total,
+                "start_tls_refused_start_tls_already_active_total": (
+                    self._start_tls_refused_start_tls_already_active_total
+                ),
+                "start_tls_refused_crypto_codec_attached_total": (
+                    self._start_tls_refused_crypto_codec_attached_total
+                ),
+                "start_tls_tls_error_total": self._start_tls_tls_error_total,
+                "crypto_codec_attach_total": self._crypto_codec_attach_total,
+                "crypto_codec_attach_success_total": self._crypto_codec_attach_success_total,
+                "crypto_codec_attach_failure_total": self._crypto_codec_attach_failure_total,
+                "crypto_codec_attach_cancelled_total": self._crypto_codec_attach_cancelled_total,
+                "crypto_codec_attach_refused_not_opened_total": (
+                    self._crypto_codec_attach_refused_not_opened_total
+                ),
+                "crypto_codec_attach_refused_already_under_ssl_total": (
+                    self._crypto_codec_attach_refused_already_under_ssl_total
+                ),
+                "crypto_codec_attach_refused_start_tls_active_total": (
+                    self._crypto_codec_attach_refused_start_tls_active_total
+                ),
+                "crypto_codec_attach_refused_already_attached_total": (
+                    self._crypto_codec_attach_refused_already_attached_total
+                ),
+                "crypto_codec_detach_total": self._crypto_codec_detach_total,
+                "crypto_codec_detach_success_total": self._crypto_codec_detach_success_total,
+                "crypto_codec_detach_failure_total": self._crypto_codec_detach_failure_total,
+                "crypto_codec_detach_cancelled_total": self._crypto_codec_detach_cancelled_total,
+                "crypto_codec_detach_refused_not_opened_total": (
+                    self._crypto_codec_detach_refused_not_opened_total
+                ),
+                "crypto_codec_detach_refused_not_attached_total": (
+                    self._crypto_codec_detach_refused_not_attached_total
+                ),
+                "stream_read_total": self._stream_read_total,
+                "stream_read_success_total": self._stream_read_success_total,
+                "stream_read_timeout_total": self._stream_read_timeout_total,
+                "stream_read_error_total": self._stream_read_error_total,
+                "stream_read_cancelled_total": self._stream_read_cancelled_total,
+                "stream_read_tls_error_total": self._stream_read_tls_error_total,
+                "stream_read_remote_disconnect_total": self._stream_read_remote_disconnect_total,
+                "stream_write_total": self._stream_write_total,
+                "stream_write_success_total": self._stream_write_success_total,
+                "stream_write_error_total": self._stream_write_error_total,
+                "stream_write_tls_error_total": self._stream_write_tls_error_total,
+                "drain_total": self._drain_total,
+                "drain_success_total": self._drain_success_total,
+                "drain_timeout_total": self._drain_timeout_total,
+                "drain_error_total": self._drain_error_total,
+                "drain_cancelled_total": self._drain_cancelled_total,
+                "drain_tls_error_total": self._drain_tls_error_total,
             },
         }
 
 
-# ---- Crypto Codec Attach metric ----------------------------------------------------------
-
-# tcp_stream.crypto_codec.attach.attempts_total
-# tcp_stream.crypto_codec.attach.success_total
-# tcp_stream.crypto_codec.attach.failure_total
-# tcp_stream.crypto_codec.attach.refused_not_opened_total
-# tcp_stream.crypto_codec.attach.refused_already_under_ssl_total
-# tcp_stream.crypto_codec.attach.refused_start_tls_active_total
-# tcp_stream.crypto_codec.attach.refused_already_attached_total
-
-
-class TcpStreamCryptoCodecAttachAttemptOutcome(StrEnum):
-    SUCCESS = "SUCCESS"
-    FAILURE = "FAILURE"
-    REFUSED_NOT_OPENED = "REFUSED_NOT_OPENED"
-    REFUSED_ALREADY_UNDER_SSL = "REFUSED_ALREADY_UNDER_SSL"
-    REFUSED_START_TLS_ACTIVE = "REFUSED_START_TLS_ACTIVE"
-    REFUSED_ALREADY_ATTACHED = "REFUSED_ALREADY_ATTACHED"
-
-
-@dataclass(frozen=True, slots=True)
-class TcpStreamCryptoCodecAttachAttemptMetricEvent(MetricEvent):
-    outcome: TcpStreamCryptoCodecAttachAttemptOutcome
-
-    @property
-    def event_type(self) -> str:
-        return "tcp_stream.crypto_codec.attach.attempt"
+# ---- Operation latency metric ------------------------------------------------------------
+#
+# Metric:
+#   tcp_stream.operation.latency
+#
+# Dimensions:
+#   open_success_latency_average_ns
+#   open_success_latency_max_ns
+#   close_success_latency_average_ns
+#   close_success_latency_max_ns
+#   start_tls_success_latency_average_ns
+#   start_tls_success_latency_max_ns
+#   crypto_codec_attach_success_latency_average_ns
+#   crypto_codec_attach_success_latency_max_ns
+#   crypto_codec_detach_success_latency_average_ns
+#   crypto_codec_detach_success_latency_max_ns
+#   stream_read_success_latency_average_ns
+#   stream_read_success_latency_max_ns
+#   stream_write_success_latency_average_ns
+#   stream_write_success_latency_max_ns
+#   drain_success_latency_average_ns
+#   drain_success_latency_max_ns
 
 
-class TcpStreamCryptoCodecAttachAttemptsMetric(Metric):
+class TcpStreamOperationLatencyMetric(Metric):
     def __init__(self) -> None:
-        self._total = 0
-        self._success_total = 0
-        self._failure_total = 0
-        self._refused_not_opened_total = 0
-        self._refused_already_under_ssl_total = 0
-        self._refused_start_tls_active_total = 0
-        self._refused_already_attached_total = 0
+        self._open_success_total = 0
+        self._open_success_latency_total_ns = 0
+        self._open_success_latency_max_ns = 0
+
+        self._close_success_total = 0
+        self._close_success_latency_total_ns = 0
+        self._close_success_latency_max_ns = 0
+
+        self._start_tls_success_total = 0
+        self._start_tls_success_latency_total_ns = 0
+        self._start_tls_success_latency_max_ns = 0
+
+        self._crypto_codec_attach_success_total = 0
+        self._crypto_codec_attach_success_latency_total_ns = 0
+        self._crypto_codec_attach_success_latency_max_ns = 0
+
+        self._crypto_codec_detach_success_total = 0
+        self._crypto_codec_detach_success_latency_total_ns = 0
+        self._crypto_codec_detach_success_latency_max_ns = 0
+
+        self._stream_read_success_total = 0
+        self._stream_read_success_latency_total_ns = 0
+        self._stream_read_success_latency_max_ns = 0
+
+        self._stream_write_success_total = 0
+        self._stream_write_success_latency_total_ns = 0
+        self._stream_write_success_latency_max_ns = 0
+
+        self._drain_success_total = 0
+        self._drain_success_latency_total_ns = 0
+        self._drain_success_latency_max_ns = 0
 
     @property
     def metric_name(self) -> str:
-        return "tcp_stream.crypto_codec.attach.attempts"
+        return "tcp_stream.operation.latency"
 
     def handle_event(self, event: MetricEvent) -> bool:
-        if not isinstance(event, TcpStreamCryptoCodecAttachAttemptMetricEvent):
-            return False
+        if isinstance(event, TcpStreamOpenMetricEvent):
+            if event.result is not TcpStreamOpenResult.SUCCEEDED:
+                return False
+            self._open_success_total += 1
+            self._open_success_latency_total_ns += event.duration_ns
+            self._open_success_latency_max_ns = max(
+                self._open_success_latency_max_ns,
+                event.duration_ns,
+            )
+            return True
 
-        self._total += 1
+        if isinstance(event, TcpStreamCloseMetricEvent):
+            if event.result is not TcpStreamCloseResult.SUCCEEDED:
+                return False
+            self._close_success_total += 1
+            self._close_success_latency_total_ns += event.duration_ns
+            self._close_success_latency_max_ns = max(
+                self._close_success_latency_max_ns,
+                event.duration_ns,
+            )
+            return True
 
-        if event.outcome is TcpStreamCryptoCodecAttachAttemptOutcome.SUCCESS:
-            self._success_total += 1
+        if isinstance(event, TcpStreamStartTlsMetricEvent):
+            if event.result is not TcpStreamStartTlsResult.SUCCEEDED:
+                return False
+            self._start_tls_success_total += 1
+            self._start_tls_success_latency_total_ns += event.duration_ns
+            self._start_tls_success_latency_max_ns = max(
+                self._start_tls_success_latency_max_ns,
+                event.duration_ns,
+            )
+            return True
 
-        elif event.outcome is TcpStreamCryptoCodecAttachAttemptOutcome.FAILURE:
-            self._failure_total += 1
+        if isinstance(event, TcpStreamCryptoCodecAttachMetricEvent):
+            if event.result is not TcpStreamCryptoCodecAttachResult.SUCCEEDED:
+                return False
+            self._crypto_codec_attach_success_total += 1
+            self._crypto_codec_attach_success_latency_total_ns += event.duration_ns
+            self._crypto_codec_attach_success_latency_max_ns = max(
+                self._crypto_codec_attach_success_latency_max_ns,
+                event.duration_ns,
+            )
+            return True
 
-        elif event.outcome is TcpStreamCryptoCodecAttachAttemptOutcome.REFUSED_NOT_OPENED:
-            self._refused_not_opened_total += 1
+        if isinstance(event, TcpStreamCryptoCodecDetachMetricEvent):
+            if event.result is not TcpStreamCryptoCodecDetachResult.SUCCEEDED:
+                return False
+            self._crypto_codec_detach_success_total += 1
+            self._crypto_codec_detach_success_latency_total_ns += event.duration_ns
+            self._crypto_codec_detach_success_latency_max_ns = max(
+                self._crypto_codec_detach_success_latency_max_ns,
+                event.duration_ns,
+            )
+            return True
 
-        elif event.outcome is TcpStreamCryptoCodecAttachAttemptOutcome.REFUSED_ALREADY_UNDER_SSL:
-            self._refused_already_under_ssl_total += 1
+        if isinstance(event, TcpStreamStreamReadMetricEvent):
+            if event.result is not TcpStreamStreamReadResult.SUCCEEDED:
+                return False
+            self._stream_read_success_total += 1
+            self._stream_read_success_latency_total_ns += event.duration_ns
+            self._stream_read_success_latency_max_ns = max(
+                self._stream_read_success_latency_max_ns,
+                event.duration_ns,
+            )
+            return True
 
-        elif event.outcome is TcpStreamCryptoCodecAttachAttemptOutcome.REFUSED_START_TLS_ACTIVE:
-            self._refused_start_tls_active_total += 1
+        if isinstance(event, TcpStreamStreamWriteMetricEvent):
+            if event.result is not TcpStreamStreamWriteResult.SUCCEEDED:
+                return False
+            self._stream_write_success_total += 1
+            self._stream_write_success_latency_total_ns += event.duration_ns
+            self._stream_write_success_latency_max_ns = max(
+                self._stream_write_success_latency_max_ns,
+                event.duration_ns,
+            )
+            return True
 
-        elif event.outcome is TcpStreamCryptoCodecAttachAttemptOutcome.REFUSED_ALREADY_ATTACHED:
-            self._refused_already_attached_total += 1
+        if isinstance(event, TcpStreamDrainMetricEvent):
+            if event.result is not TcpStreamDrainResult.SUCCEEDED:
+                return False
+            self._drain_success_total += 1
+            self._drain_success_latency_total_ns += event.duration_ns
+            self._drain_success_latency_max_ns = max(
+                self._drain_success_latency_max_ns,
+                event.duration_ns,
+            )
+            return True
 
-        return True
+        return False
 
     def snapshot(self) -> Mapping[str, Any]:
         return {
             "name": self.metric_name,
             "dimensions": {
-                "total": self._total,
-                "success_total": self._success_total,
-                "failure_total": self._failure_total,
-                "refused_not_opened_total": self._refused_not_opened_total,
-                "refused_already_under_ssl_total": self._refused_already_under_ssl_total,
-                "refused_start_tls_active_total": self._refused_start_tls_active_total,
-                "refused_already_attached_total": self._refused_already_attached_total,
+                "open_success_latency_average_ns": _average_or_zero(
+                    total=self._open_success_latency_total_ns,
+                    count=self._open_success_total,
+                ),
+                "open_success_latency_max_ns": self._open_success_latency_max_ns,
+                "close_success_latency_average_ns": _average_or_zero(
+                    total=self._close_success_latency_total_ns,
+                    count=self._close_success_total,
+                ),
+                "close_success_latency_max_ns": self._close_success_latency_max_ns,
+                "start_tls_success_latency_average_ns": _average_or_zero(
+                    total=self._start_tls_success_latency_total_ns,
+                    count=self._start_tls_success_total,
+                ),
+                "start_tls_success_latency_max_ns": self._start_tls_success_latency_max_ns,
+                "crypto_codec_attach_success_latency_average_ns": _average_or_zero(
+                    total=self._crypto_codec_attach_success_latency_total_ns,
+                    count=self._crypto_codec_attach_success_total,
+                ),
+                "crypto_codec_attach_success_latency_max_ns": (
+                    self._crypto_codec_attach_success_latency_max_ns
+                ),
+                "crypto_codec_detach_success_latency_average_ns": _average_or_zero(
+                    total=self._crypto_codec_detach_success_latency_total_ns,
+                    count=self._crypto_codec_detach_success_total,
+                ),
+                "crypto_codec_detach_success_latency_max_ns": (
+                    self._crypto_codec_detach_success_latency_max_ns
+                ),
+                "stream_read_success_latency_average_ns": _average_or_zero(
+                    total=self._stream_read_success_latency_total_ns,
+                    count=self._stream_read_success_total,
+                ),
+                "stream_read_success_latency_max_ns": self._stream_read_success_latency_max_ns,
+                "stream_write_success_latency_average_ns": _average_or_zero(
+                    total=self._stream_write_success_latency_total_ns,
+                    count=self._stream_write_success_total,
+                ),
+                "stream_write_success_latency_max_ns": self._stream_write_success_latency_max_ns,
+                "drain_success_latency_average_ns": _average_or_zero(
+                    total=self._drain_success_latency_total_ns,
+                    count=self._drain_success_total,
+                ),
+                "drain_success_latency_max_ns": self._drain_success_latency_max_ns,
             },
         }
 
 
-# ---- Crypto Codec Detach metric ----------------------------------------------------------
-
-# tcp_stream.crypto_codec.detach.attempts_total
-# tcp_stream.crypto_codec.detach.success_total
-# tcp_stream.crypto_codec.detach.failure_total
-# tcp_stream.crypto_codec.detach.refused_not_opened_total
-# tcp_stream.crypto_codec.detach.refused_not_attached_total
-
-
-class TcpStreamCryptoCodecDetachAttemptOutcome(StrEnum):
-    SUCCESS = "SUCCESS"
-    FAILURE = "FAILURE"
-    REFUSED_NOT_OPENED = "REFUSED_NOT_OPENED"
-    REFUSED_NOT_ATTACHED = "REFUSED_NOT_ATTACHED"
+# ---- I/O bytes metric --------------------------------------------------------------------
+#
+# Metric:
+#   tcp_stream.io.bytes
+#
+# Dimensions:
+#   received_total
+#   sent_total
+#   read_success_bytes_average
+#   write_success_bytes_average
 
 
-@dataclass(frozen=True, slots=True)
-class TcpStreamCryptoCodecDetachAttemptMetricEvent(MetricEvent):
-    outcome: TcpStreamCryptoCodecDetachAttemptOutcome
-
-    @property
-    def event_type(self) -> str:
-        return "tcp_stream.crypto_codec.detach.attempt"
-
-
-class TcpStreamCryptoCodecDetachAttemptsMetric(Metric):
+class TcpStreamIoBytesMetric(Metric):
     def __init__(self) -> None:
-        self._total = 0
-        self._success_total = 0
-        self._failure_total = 0
-        self._refused_not_opened_total = 0
-        self._refused_not_attached_total = 0
+        self._received_total = 0
+        self._sent_total = 0
+        self._read_success_total = 0
+        self._write_success_total = 0
 
     @property
     def metric_name(self) -> str:
-        return "tcp_stream.crypto_codec.detach.attempts"
+        return "tcp_stream.io.bytes"
 
     def handle_event(self, event: MetricEvent) -> bool:
-        if not isinstance(event, TcpStreamCryptoCodecDetachAttemptMetricEvent):
-            return False
+        if isinstance(event, TcpStreamStreamReadMetricEvent):
+            if event.result is not TcpStreamStreamReadResult.SUCCEEDED:
+                return False
 
-        self._total += 1
+            self._received_total += event.bytes_count
+            self._read_success_total += 1
+            return True
 
-        if event.outcome is TcpStreamCryptoCodecDetachAttemptOutcome.SUCCESS:
-            self._success_total += 1
+        if isinstance(event, TcpStreamStreamWriteMetricEvent):
+            if event.result is not TcpStreamStreamWriteResult.SUCCEEDED:
+                return False
 
-        elif event.outcome is TcpStreamCryptoCodecDetachAttemptOutcome.FAILURE:
-            self._failure_total += 1
+            self._sent_total += event.bytes_count
+            self._write_success_total += 1
+            return True
 
-        elif event.outcome is TcpStreamCryptoCodecDetachAttemptOutcome.REFUSED_NOT_OPENED:
-            self._refused_not_opened_total += 1
-
-        elif event.outcome is TcpStreamCryptoCodecDetachAttemptOutcome.REFUSED_NOT_ATTACHED:
-            self._refused_not_attached_total += 1
-
-        return True
+        return False
 
     def snapshot(self) -> Mapping[str, Any]:
         return {
             "name": self.metric_name,
             "dimensions": {
-                "total": self._total,
-                "success_total": self._success_total,
-                "failure_total": self._failure_total,
-                "refused_not_opened_total": self._refused_not_opened_total,
-                "refused_not_attached_total": self._refused_not_attached_total,
+                "received_total": self._received_total,
+                "sent_total": self._sent_total,
+                "read_success_bytes_average": _average_or_zero(
+                    total=self._received_total,
+                    count=self._read_success_total,
+                ),
+                "write_success_bytes_average": _average_or_zero(
+                    total=self._sent_total,
+                    count=self._write_success_total,
+                ),
             },
         }
 
 
-# ---- Stream Read metric ------------------------------------------------------------------
-
-# tcp_stream.stream_read.attempts_total
-# tcp_stream.stream_read.success_total
-# tcp_stream.stream_read.timeout_total
-# tcp_stream.stream_read.error_total
-# tcp_stream.stream_read.cancelled_total
-# tcp_stream.stream_read.tls_error_total
-
-
-class TcpStreamStreamReadAttemptOutcome(StrEnum):
-    SUCCESS = "SUCCESS"
-    TIMEOUT = "TIMEOUT"
-    ERROR = "ERROR"
-    CANCELLED = "CANCELLED"
-    TLS_ERROR = "TLS_ERROR"
-
-
-@dataclass(frozen=True, slots=True)
-class TcpStreamStreamReadAttemptMetricEvent(MetricEvent):
-    outcome: TcpStreamStreamReadAttemptOutcome
-
-    @property
-    def event_type(self) -> str:
-        return "tcp_stream.stream_read.attempt"
-
-
-class TcpStreamStreamReadAttemptsMetric(Metric):
-    def __init__(self) -> None:
-        self._total = 0
-        self._success_total = 0
-        self._timeout_total = 0
-        self._error_total = 0
-        self._cancelled_total = 0
-        self._tls_error_total = 0
-
-    @property
-    def metric_name(self) -> str:
-        return "tcp_stream.stream_read.attempts"
-
-    def handle_event(self, event: MetricEvent) -> bool:
-        if not isinstance(event, TcpStreamStreamReadAttemptMetricEvent):
-            return False
-
-        self._total += 1
-
-        if event.outcome is TcpStreamStreamReadAttemptOutcome.SUCCESS:
-            self._success_total += 1
-
-        elif event.outcome is TcpStreamStreamReadAttemptOutcome.TIMEOUT:
-            self._timeout_total += 1
-
-        elif event.outcome is TcpStreamStreamReadAttemptOutcome.ERROR:
-            self._error_total += 1
-
-        elif event.outcome is TcpStreamStreamReadAttemptOutcome.CANCELLED:
-            self._cancelled_total += 1
-
-        elif event.outcome is TcpStreamStreamReadAttemptOutcome.TLS_ERROR:
-            self._tls_error_total += 1
-
-        return True
-
-    def snapshot(self) -> Mapping[str, Any]:
-        return {
-            "name": self.metric_name,
-            "dimensions": {
-                "total": self._total,
-                "success_total": self._success_total,
-                "timeout_total": self._timeout_total,
-                "error_total": self._error_total,
-                "cancelled_total": self._cancelled_total,
-                "tls_error_total": self._tls_error_total,
-            },
-        }
-
-
-# ---- Stream Write metric -----------------------------------------------------------------
-
-# tcp_stream.stream_write.attempts_total
-# tcp_stream.stream_write.success_total
-# tcp_stream.stream_write.error_total
-# tcp_stream.stream_write.tls_error_total
-
-
-class TcpStreamStreamWriteAttemptOutcome(StrEnum):
-    SUCCESS = "SUCCESS"
-    ERROR = "ERROR"
-    TLS_ERROR = "TLS_ERROR"
-
-
-@dataclass(frozen=True, slots=True)
-class TcpStreamStreamWriteAttemptMetricEvent(MetricEvent):
-    outcome: TcpStreamStreamWriteAttemptOutcome
-
-    @property
-    def event_type(self) -> str:
-        return "tcp_stream.stream_write.attempt"
-
-
-class TcpStreamStreamWriteAttemptsMetric(Metric):
-    def __init__(self) -> None:
-        self._total = 0
-        self._success_total = 0
-        self._error_total = 0
-        self._tls_error_total = 0
-
-    @property
-    def metric_name(self) -> str:
-        return "tcp_stream.stream_write.attempts"
-
-    def handle_event(self, event: MetricEvent) -> bool:
-        if not isinstance(event, TcpStreamStreamWriteAttemptMetricEvent):
-            return False
-
-        self._total += 1
-
-        if event.outcome is TcpStreamStreamWriteAttemptOutcome.SUCCESS:
-            self._success_total += 1
-
-        elif event.outcome is TcpStreamStreamWriteAttemptOutcome.ERROR:
-            self._error_total += 1
-
-        elif event.outcome is TcpStreamStreamWriteAttemptOutcome.TLS_ERROR:
-            self._tls_error_total += 1
-
-        return True
-
-    def snapshot(self) -> Mapping[str, Any]:
-        return {
-            "name": self.metric_name,
-            "dimensions": {
-                "total": self._total,
-                "success_total": self._success_total,
-                "error_total": self._error_total,
-                "tls_error_total": self._tls_error_total,
-            },
-        }
-
-
-# ---- Drain metric ------------------------------------------------------------------------
-
-# tcp_stream.drain.attempts_total
-# tcp_stream.drain.success_total
-# tcp_stream.drain.timeout_total
-# tcp_stream.drain.error_total
-# tcp_stream.drain.cancelled_total
-# tcp_stream.drain.tls_error_total
-
-
-class TcpStreamDrainAttemptOutcome(StrEnum):
-    SUCCESS = "SUCCESS"
-    TIMEOUT = "TIMEOUT"
-    ERROR = "ERROR"
-    CANCELLED = "CANCELLED"
-    TLS_ERROR = "TLS_ERROR"
-
-
-@dataclass(frozen=True, slots=True)
-class TcpStreamDrainAttemptMetricEvent(MetricEvent):
-    outcome: TcpStreamDrainAttemptOutcome
-
-    @property
-    def event_type(self) -> str:
-        return "tcp_stream.drain.attempt"
-
-
-class TcpStreamDrainAttemptsMetric(Metric):
-    def __init__(self) -> None:
-        self._total = 0
-        self._success_total = 0
-        self._timeout_total = 0
-        self._error_total = 0
-        self._cancelled_total = 0
-        self._tls_error_total = 0
-
-    @property
-    def metric_name(self) -> str:
-        return "tcp_stream.drain.attempts"
-
-    def handle_event(self, event: MetricEvent) -> bool:
-        if not isinstance(event, TcpStreamDrainAttemptMetricEvent):
-            return False
-
-        self._total += 1
-
-        if event.outcome is TcpStreamDrainAttemptOutcome.SUCCESS:
-            self._success_total += 1
-
-        elif event.outcome is TcpStreamDrainAttemptOutcome.TIMEOUT:
-            self._timeout_total += 1
-
-        elif event.outcome is TcpStreamDrainAttemptOutcome.ERROR:
-            self._error_total += 1
-
-        elif event.outcome is TcpStreamDrainAttemptOutcome.CANCELLED:
-            self._cancelled_total += 1
-
-        elif event.outcome is TcpStreamDrainAttemptOutcome.TLS_ERROR:
-            self._tls_error_total += 1
-
-        return True
-
-    def snapshot(self) -> Mapping[str, Any]:
-        return {
-            "name": self.metric_name,
-            "dimensions": {
-                "total": self._total,
-                "success_total": self._success_total,
-                "timeout_total": self._timeout_total,
-                "error_total": self._error_total,
-                "cancelled_total": self._cancelled_total,
-                "tls_error_total": self._tls_error_total,
-            },
-        }
-
-
-# ---- Bytes Received metric ---------------------------------------------------------------
-
-# tcp_stream.bytes.received_total
-
-
-@dataclass(frozen=True, slots=True)
-class TcpStreamBytesReceivedMetricEvent(MetricEvent):
-    size: int
-
-    @property
-    def event_type(self) -> str:
-        return "tcp_stream.bytes.received"
-
-
-class TcpStreamBytesReceivedMetric(Metric):
-    def __init__(self) -> None:
-        self._total = 0
-
-    @property
-    def metric_name(self) -> str:
-        return "tcp_stream.bytes.received"
-
-    def handle_event(self, event: MetricEvent) -> bool:
-        if not isinstance(event, TcpStreamBytesReceivedMetricEvent):
-            return False
-
-        self._total += event.size
-        return True
-
-    def snapshot(self) -> Mapping[str, Any]:
-        return {
-            "name": self.metric_name,
-            "dimensions": {
-                "total": self._total,
-            },
-        }
-
-
-# ---- Bytes Sent metric -------------------------------------------------------------------
-
-# tcp_stream.bytes.sent_total
-
-
-@dataclass(frozen=True, slots=True)
-class TcpStreamBytesSentMetricEvent(MetricEvent):
-    size: int
-
-    @property
-    def event_type(self) -> str:
-        return "tcp_stream.bytes.sent"
-
-
-class TcpStreamBytesSentMetric(Metric):
-    def __init__(self) -> None:
-        self._total = 0
-
-    @property
-    def metric_name(self) -> str:
-        return "tcp_stream.bytes.sent"
-
-    def handle_event(self, event: MetricEvent) -> bool:
-        if not isinstance(event, TcpStreamBytesSentMetricEvent):
-            return False
-
-        self._total += event.size
-        return True
-
-    def snapshot(self) -> Mapping[str, Any]:
-        return {
-            "name": self.metric_name,
-            "dimensions": {
-                "total": self._total,
-            },
-        }
-
-
-# ---- Remote Disconnect metric ------------------------------------------------------------
-
-# tcp_stream.remote_disconnect_total
-
-
-@dataclass(frozen=True, slots=True)
-class TcpStreamRemoteDisconnectMetricEvent(MetricEvent):
-    @property
-    def event_type(self) -> str:
-        return "tcp_stream.remote_disconnect"
+# ---- Remote disconnect metric ------------------------------------------------------------
+#
+# Metric:
+#   tcp_stream.remote_disconnect
+#
+# Dimensions:
+#   total
 
 
 class TcpStreamRemoteDisconnectMetric(Metric):
@@ -761,7 +736,10 @@ class TcpStreamRemoteDisconnectMetric(Metric):
         return "tcp_stream.remote_disconnect"
 
     def handle_event(self, event: MetricEvent) -> bool:
-        if not isinstance(event, TcpStreamRemoteDisconnectMetricEvent):
+        if not isinstance(event, TcpStreamStreamReadMetricEvent):
+            return False
+
+        if event.result is not TcpStreamStreamReadResult.REMOTE_DISCONNECTED:
             return False
 
         self._total += 1
@@ -776,16 +754,13 @@ class TcpStreamRemoteDisconnectMetric(Metric):
         }
 
 
-# ---- Abortive Close metric ---------------------------------------------------------------
-
-# tcp_stream.abortive_close_total
-
-
-@dataclass(frozen=True, slots=True)
-class TcpStreamAbortiveCloseMetricEvent(MetricEvent):
-    @property
-    def event_type(self) -> str:
-        return "tcp_stream.abortive_close"
+# ---- Abortive close metric ---------------------------------------------------------------
+#
+# Metric:
+#   tcp_stream.abortive_close
+#
+# Dimensions:
+#   total
 
 
 class TcpStreamAbortiveCloseMetric(Metric):
@@ -797,7 +772,30 @@ class TcpStreamAbortiveCloseMetric(Metric):
         return "tcp_stream.abortive_close"
 
     def handle_event(self, event: MetricEvent) -> bool:
-        if not isinstance(event, TcpStreamAbortiveCloseMetricEvent):
+        if isinstance(event, TcpStreamStartTlsMetricEvent):
+            if event.result not in (
+                TcpStreamStartTlsResult.FAILED,
+                TcpStreamStartTlsResult.TIMED_OUT,
+                TcpStreamStartTlsResult.TLS_FAILED,
+            ):
+                return False
+
+        elif isinstance(event, TcpStreamStreamReadMetricEvent):
+            if event.result not in (
+                TcpStreamStreamReadResult.FAILED,
+                TcpStreamStreamReadResult.TLS_FAILED,
+                TcpStreamStreamReadResult.REMOTE_DISCONNECTED,
+            ):
+                return False
+
+        elif isinstance(event, TcpStreamDrainMetricEvent):
+            if event.result not in (
+                TcpStreamDrainResult.FAILED,
+                TcpStreamDrainResult.TLS_FAILED,
+            ):
+                return False
+
+        else:
             return False
 
         self._total += 1

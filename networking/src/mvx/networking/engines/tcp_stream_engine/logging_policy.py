@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from mvx.networking.helpers.pattern_event_policy import (
+from mvx.common.logger.pattern_event_policy import (
     PatternLogEventPolicy,
     PatternLogEventPolicyAction,
     PatternLogEventPolicyConfig,

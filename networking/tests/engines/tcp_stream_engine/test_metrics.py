@@ -1,22 +1,15 @@
 # tests/engines/tcp_stream_engine/test_metrics.py
 
 """
-Tests for tcp_stream_engine metrics.
+Tests for tcp_stream_engine out-of-the-box metrics.
 
 Grouping rule:
-  - Group a: open attempts metric
-  - Group b: close attempts metric
-  - Group c: start_tls attempts metric
-  - Group d: crypto codec attach attempts metric
-  - Group e: crypto codec detach attempts metric
-  - Group f: stream read attempts metric
-  - Group g: stream write attempts metric
-  - Group h: drain attempts metric
-  - Group i: bytes received metric
-  - Group j: bytes sent metric
-  - Group k: remote disconnect metric
-  - Group l: abortive close metric
-  - Group m: cross-metric behavior
+  - Group a: operation attempts metric
+  - Group b: operation latency metric
+  - Group c: I/O bytes metric
+  - Group d: remote disconnect metric
+  - Group e: abortive close metric
+  - Group f: cross-metric behavior
 
 Naming rule:
   Each test name starts with test_<group><num>_, e.g. test_a1_...
@@ -24,44 +17,50 @@ Naming rule:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, cast
+from enum import StrEnum
 
 import pytest
 
-from mvx.networking.engines.tcp_stream_engine.metrics import (
-    TcpStreamCloseAttemptMetricEvent,
-    TcpStreamCloseAttemptOutcome,
-    TcpStreamCloseAttemptsMetric,
-    TcpStreamCryptoCodecAttachAttemptMetricEvent,
-    TcpStreamCryptoCodecAttachAttemptOutcome,
-    TcpStreamCryptoCodecAttachAttemptsMetric,
-    TcpStreamCryptoCodecDetachAttemptMetricEvent,
-    TcpStreamCryptoCodecDetachAttemptOutcome,
-    TcpStreamCryptoCodecDetachAttemptsMetric,
-    TcpStreamOpenAttemptMetricEvent,
-    TcpStreamOpenAttemptOutcome,
-    TcpStreamOpenAttemptsMetric,
-    TcpStreamStartTlsAttemptMetricEvent,
-    TcpStreamStartTlsAttemptOutcome,
-    TcpStreamStartTlsAttemptsMetric,
-    TcpStreamStreamReadAttemptMetricEvent,
-    TcpStreamStreamReadAttemptOutcome,
-    TcpStreamStreamReadAttemptsMetric,
-    TcpStreamStreamWriteAttemptMetricEvent,
-    TcpStreamStreamWriteAttemptOutcome,
-    TcpStreamStreamWriteAttemptsMetric,
-    TcpStreamDrainAttemptMetricEvent,
-    TcpStreamDrainAttemptOutcome,
-    TcpStreamDrainAttemptsMetric,
-    TcpStreamBytesReceivedMetricEvent,
-    TcpStreamBytesReceivedMetric,
-    TcpStreamBytesSentMetricEvent,
-    TcpStreamBytesSentMetric,
-    TcpStreamRemoteDisconnectMetricEvent,
-    TcpStreamRemoteDisconnectMetric,
-    TcpStreamAbortiveCloseMetricEvent,
-    TcpStreamAbortiveCloseMetric,
+from mvx.common.metrics import MetricEvent
+
+from mvx.networking.engines.tcp_stream_engine.metric_events import (
+    TcpStreamCloseMetricEvent,
+    TcpStreamCloseResult,
+    TcpStreamCryptoCodecAttachMetricEvent,
+    TcpStreamCryptoCodecAttachResult,
+    TcpStreamCryptoCodecDetachMetricEvent,
+    TcpStreamCryptoCodecDetachResult,
+    TcpStreamDrainMetricEvent,
+    TcpStreamDrainResult,
+    TcpStreamOpenMetricEvent,
+    TcpStreamOpenResult,
+    TcpStreamStartTlsMetricEvent,
+    TcpStreamStartTlsResult,
+    TcpStreamStreamReadMetricEvent,
+    TcpStreamStreamReadResult,
+    TcpStreamStreamWriteMetricEvent,
+    TcpStreamStreamWriteResult,
 )
+from mvx.networking.engines.tcp_stream_engine.metrics import (
+    TcpStreamAbortiveCloseMetric,
+    TcpStreamIoBytesMetric,
+    TcpStreamOperationAttemptsMetric,
+    TcpStreamOperationLatencyMetric,
+    TcpStreamRemoteDisconnectMetric,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _UnrelatedMetricEvent(MetricEvent):
+    @property
+    def event_type(self) -> str:
+        return "unrelated"
+
+
+class _UnknownMetricResult(StrEnum):
+    UNKNOWN = "UNKNOWN"
 
 
 def _dimensions(metric: Any) -> dict[str, int]:
@@ -74,629 +73,1207 @@ def _dimensions(metric: Any) -> dict[str, int]:
     return cast(dict[str, int], dimensions)
 
 
-def _assert_single_dimension_incremented(
+def _zero_dimensions(metric: Any) -> dict[str, int]:
+    return {key: 0 for key in _dimensions(metric)}
+
+
+def _finished_event(
+    event: Any,
+    result: Any,
     *,
-    dimensions: dict[str, int],
-    dimension: str,
+    duration_ns: int = 10,
+    bytes_count: int | None = None,
+) -> MetricEvent:
+    if bytes_count is None:
+        # noinspection PyProtectedMember
+        event._set_result(result)
+    else:
+        # noinspection PyProtectedMember
+        event._set_result(result, bytes_count=bytes_count)
+
+    # noinspection PyProtectedMember
+    event._started_ns = 0
+    # noinspection PyProtectedMember
+    event._finished_ns = duration_ns
+
+    return cast(MetricEvent, event)
+
+
+# -------------------------
+# Group a: operation attempts metric
+# -------------------------
+
+
+def test_a1_operation_attempts_metric_has_expected_identity_and_initial_snapshot() -> None:
+    metric = TcpStreamOperationAttemptsMetric()
+
+    assert metric.metric_name == "tcp_stream.operation.attempts"
+    assert _dimensions(metric) == {
+        "open_total": 0,
+        "open_success_total": 0,
+        "open_already_opened_total": 0,
+        "open_failure_total": 0,
+        "open_cancelled_total": 0,
+        "open_plain_success_total": 0,
+        "open_ssl_success_total": 0,
+        "close_total": 0,
+        "close_success_total": 0,
+        "close_not_opened_total": 0,
+        "close_failure_total": 0,
+        "close_cancelled_total": 0,
+        "start_tls_total": 0,
+        "start_tls_success_total": 0,
+        "start_tls_failure_total": 0,
+        "start_tls_cancelled_total": 0,
+        "start_tls_timeout_total": 0,
+        "start_tls_refused_not_opened_total": 0,
+        "start_tls_refused_already_under_ssl_total": 0,
+        "start_tls_refused_start_tls_already_active_total": 0,
+        "start_tls_refused_crypto_codec_attached_total": 0,
+        "start_tls_tls_error_total": 0,
+        "crypto_codec_attach_total": 0,
+        "crypto_codec_attach_success_total": 0,
+        "crypto_codec_attach_failure_total": 0,
+        "crypto_codec_attach_cancelled_total": 0,
+        "crypto_codec_attach_refused_not_opened_total": 0,
+        "crypto_codec_attach_refused_already_under_ssl_total": 0,
+        "crypto_codec_attach_refused_start_tls_active_total": 0,
+        "crypto_codec_attach_refused_already_attached_total": 0,
+        "crypto_codec_detach_total": 0,
+        "crypto_codec_detach_success_total": 0,
+        "crypto_codec_detach_failure_total": 0,
+        "crypto_codec_detach_cancelled_total": 0,
+        "crypto_codec_detach_refused_not_opened_total": 0,
+        "crypto_codec_detach_refused_not_attached_total": 0,
+        "stream_read_total": 0,
+        "stream_read_success_total": 0,
+        "stream_read_timeout_total": 0,
+        "stream_read_error_total": 0,
+        "stream_read_cancelled_total": 0,
+        "stream_read_tls_error_total": 0,
+        "stream_read_remote_disconnect_total": 0,
+        "stream_write_total": 0,
+        "stream_write_success_total": 0,
+        "stream_write_error_total": 0,
+        "stream_write_tls_error_total": 0,
+        "drain_total": 0,
+        "drain_success_total": 0,
+        "drain_timeout_total": 0,
+        "drain_error_total": 0,
+        "drain_cancelled_total": 0,
+        "drain_tls_error_total": 0,
+    }
+
+
+@pytest.mark.parametrize(
+    ("event", "expected_changed"),
+    [
+        (
+            _finished_event(
+                TcpStreamOpenMetricEvent(use_ssl=False),
+                TcpStreamOpenResult.SUCCEEDED,
+            ),
+            {
+                "open_total": 1,
+                "open_success_total": 1,
+                "open_plain_success_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamOpenMetricEvent(use_ssl=True),
+                TcpStreamOpenResult.SUCCEEDED,
+            ),
+            {
+                "open_total": 1,
+                "open_success_total": 1,
+                "open_ssl_success_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamOpenMetricEvent(use_ssl=False),
+                TcpStreamOpenResult.ALREADY_OPENED,
+            ),
+            {
+                "open_total": 1,
+                "open_already_opened_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamOpenMetricEvent(use_ssl=False),
+                TcpStreamOpenResult.FAILED,
+            ),
+            {
+                "open_total": 1,
+                "open_failure_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamOpenMetricEvent(use_ssl=False),
+                TcpStreamOpenResult.CANCELLED,
+            ),
+            {
+                "open_total": 1,
+                "open_cancelled_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamCloseMetricEvent(),
+                TcpStreamCloseResult.SUCCEEDED,
+            ),
+            {
+                "close_total": 1,
+                "close_success_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamCloseMetricEvent(),
+                TcpStreamCloseResult.NOT_OPENED,
+            ),
+            {
+                "close_total": 1,
+                "close_not_opened_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamCloseMetricEvent(),
+                TcpStreamCloseResult.FAILED,
+            ),
+            {
+                "close_total": 1,
+                "close_failure_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamCloseMetricEvent(),
+                TcpStreamCloseResult.CANCELLED,
+            ),
+            {
+                "close_total": 1,
+                "close_cancelled_total": 1,
+            },
+        ),
+    ],
+)
+def test_a2_operation_attempts_metric_counts_open_and_close_events(
+    event: MetricEvent,
+    expected_changed: dict[str, int],
 ) -> None:
-    assert dimensions["total"] == 1
-    assert dimensions[dimension] == 1
+    metric = TcpStreamOperationAttemptsMetric()
+
+    changed = metric.handle_event(event)
+
+    expected = _zero_dimensions(metric)
+    expected.update(expected_changed)
+
+    assert changed is True
+    assert _dimensions(metric) == expected
+
+
+@pytest.mark.parametrize(
+    ("event", "expected_changed"),
+    [
+        (
+            _finished_event(
+                TcpStreamStartTlsMetricEvent(),
+                TcpStreamStartTlsResult.SUCCEEDED,
+            ),
+            {
+                "start_tls_total": 1,
+                "start_tls_success_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamStartTlsMetricEvent(),
+                TcpStreamStartTlsResult.FAILED,
+            ),
+            {
+                "start_tls_total": 1,
+                "start_tls_failure_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamStartTlsMetricEvent(),
+                TcpStreamStartTlsResult.CANCELLED,
+            ),
+            {
+                "start_tls_total": 1,
+                "start_tls_cancelled_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamStartTlsMetricEvent(),
+                TcpStreamStartTlsResult.TIMED_OUT,
+            ),
+            {
+                "start_tls_total": 1,
+                "start_tls_timeout_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamStartTlsMetricEvent(),
+                TcpStreamStartTlsResult.REFUSED_NOT_OPENED,
+            ),
+            {
+                "start_tls_total": 1,
+                "start_tls_refused_not_opened_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamStartTlsMetricEvent(),
+                TcpStreamStartTlsResult.REFUSED_ALREADY_UNDER_SSL,
+            ),
+            {
+                "start_tls_total": 1,
+                "start_tls_refused_already_under_ssl_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamStartTlsMetricEvent(),
+                TcpStreamStartTlsResult.REFUSED_START_TLS_ALREADY_ACTIVE,
+            ),
+            {
+                "start_tls_total": 1,
+                "start_tls_refused_start_tls_already_active_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamStartTlsMetricEvent(),
+                TcpStreamStartTlsResult.REFUSED_CRYPTO_CODEC_ATTACHED,
+            ),
+            {
+                "start_tls_total": 1,
+                "start_tls_refused_crypto_codec_attached_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamStartTlsMetricEvent(),
+                TcpStreamStartTlsResult.TLS_FAILED,
+            ),
+            {
+                "start_tls_total": 1,
+                "start_tls_tls_error_total": 1,
+            },
+        ),
+    ],
+)
+def test_a3_operation_attempts_metric_counts_start_tls_events(
+    event: MetricEvent,
+    expected_changed: dict[str, int],
+) -> None:
+    metric = TcpStreamOperationAttemptsMetric()
+
+    changed = metric.handle_event(event)
+
+    expected = _zero_dimensions(metric)
+    expected.update(expected_changed)
+
+    assert changed is True
+    assert _dimensions(metric) == expected
+
+
+@pytest.mark.parametrize(
+    ("event", "expected_changed"),
+    [
+        (
+            _finished_event(
+                TcpStreamCryptoCodecAttachMetricEvent(),
+                TcpStreamCryptoCodecAttachResult.SUCCEEDED,
+            ),
+            {
+                "crypto_codec_attach_total": 1,
+                "crypto_codec_attach_success_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamCryptoCodecAttachMetricEvent(),
+                TcpStreamCryptoCodecAttachResult.FAILED,
+            ),
+            {
+                "crypto_codec_attach_total": 1,
+                "crypto_codec_attach_failure_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamCryptoCodecAttachMetricEvent(),
+                TcpStreamCryptoCodecAttachResult.CANCELLED,
+            ),
+            {
+                "crypto_codec_attach_total": 1,
+                "crypto_codec_attach_cancelled_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamCryptoCodecAttachMetricEvent(),
+                TcpStreamCryptoCodecAttachResult.REFUSED_NOT_OPENED,
+            ),
+            {
+                "crypto_codec_attach_total": 1,
+                "crypto_codec_attach_refused_not_opened_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamCryptoCodecAttachMetricEvent(),
+                TcpStreamCryptoCodecAttachResult.REFUSED_ALREADY_UNDER_SSL,
+            ),
+            {
+                "crypto_codec_attach_total": 1,
+                "crypto_codec_attach_refused_already_under_ssl_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamCryptoCodecAttachMetricEvent(),
+                TcpStreamCryptoCodecAttachResult.REFUSED_START_TLS_ACTIVE,
+            ),
+            {
+                "crypto_codec_attach_total": 1,
+                "crypto_codec_attach_refused_start_tls_active_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamCryptoCodecAttachMetricEvent(),
+                TcpStreamCryptoCodecAttachResult.REFUSED_ALREADY_ATTACHED,
+            ),
+            {
+                "crypto_codec_attach_total": 1,
+                "crypto_codec_attach_refused_already_attached_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamCryptoCodecDetachMetricEvent(),
+                TcpStreamCryptoCodecDetachResult.SUCCEEDED,
+            ),
+            {
+                "crypto_codec_detach_total": 1,
+                "crypto_codec_detach_success_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamCryptoCodecDetachMetricEvent(),
+                TcpStreamCryptoCodecDetachResult.FAILED,
+            ),
+            {
+                "crypto_codec_detach_total": 1,
+                "crypto_codec_detach_failure_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamCryptoCodecDetachMetricEvent(),
+                TcpStreamCryptoCodecDetachResult.CANCELLED,
+            ),
+            {
+                "crypto_codec_detach_total": 1,
+                "crypto_codec_detach_cancelled_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamCryptoCodecDetachMetricEvent(),
+                TcpStreamCryptoCodecDetachResult.REFUSED_NOT_OPENED,
+            ),
+            {
+                "crypto_codec_detach_total": 1,
+                "crypto_codec_detach_refused_not_opened_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamCryptoCodecDetachMetricEvent(),
+                TcpStreamCryptoCodecDetachResult.REFUSED_NOT_ATTACHED,
+            ),
+            {
+                "crypto_codec_detach_total": 1,
+                "crypto_codec_detach_refused_not_attached_total": 1,
+            },
+        ),
+    ],
+)
+def test_a4_operation_attempts_metric_counts_crypto_codec_events(
+    event: MetricEvent,
+    expected_changed: dict[str, int],
+) -> None:
+    metric = TcpStreamOperationAttemptsMetric()
+
+    changed = metric.handle_event(event)
+
+    expected = _zero_dimensions(metric)
+    expected.update(expected_changed)
+
+    assert changed is True
+    assert _dimensions(metric) == expected
+
+
+@pytest.mark.parametrize(
+    ("event", "expected_changed"),
+    [
+        (
+            _finished_event(
+                TcpStreamStreamReadMetricEvent(),
+                TcpStreamStreamReadResult.SUCCEEDED,
+                bytes_count=3,
+            ),
+            {
+                "stream_read_total": 1,
+                "stream_read_success_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamStreamReadMetricEvent(),
+                TcpStreamStreamReadResult.TIMED_OUT,
+            ),
+            {
+                "stream_read_total": 1,
+                "stream_read_timeout_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamStreamReadMetricEvent(),
+                TcpStreamStreamReadResult.FAILED,
+            ),
+            {
+                "stream_read_total": 1,
+                "stream_read_error_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamStreamReadMetricEvent(),
+                TcpStreamStreamReadResult.CANCELLED,
+            ),
+            {
+                "stream_read_total": 1,
+                "stream_read_cancelled_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamStreamReadMetricEvent(),
+                TcpStreamStreamReadResult.TLS_FAILED,
+            ),
+            {
+                "stream_read_total": 1,
+                "stream_read_tls_error_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamStreamReadMetricEvent(),
+                TcpStreamStreamReadResult.REMOTE_DISCONNECTED,
+            ),
+            {
+                "stream_read_total": 1,
+                "stream_read_remote_disconnect_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamStreamWriteMetricEvent(),
+                TcpStreamStreamWriteResult.SUCCEEDED,
+                bytes_count=3,
+            ),
+            {
+                "stream_write_total": 1,
+                "stream_write_success_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamStreamWriteMetricEvent(),
+                TcpStreamStreamWriteResult.FAILED,
+            ),
+            {
+                "stream_write_total": 1,
+                "stream_write_error_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamStreamWriteMetricEvent(),
+                TcpStreamStreamWriteResult.TLS_FAILED,
+            ),
+            {
+                "stream_write_total": 1,
+                "stream_write_tls_error_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamDrainMetricEvent(),
+                TcpStreamDrainResult.SUCCEEDED,
+            ),
+            {
+                "drain_total": 1,
+                "drain_success_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamDrainMetricEvent(),
+                TcpStreamDrainResult.TIMED_OUT,
+            ),
+            {
+                "drain_total": 1,
+                "drain_timeout_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamDrainMetricEvent(),
+                TcpStreamDrainResult.FAILED,
+            ),
+            {
+                "drain_total": 1,
+                "drain_error_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamDrainMetricEvent(),
+                TcpStreamDrainResult.CANCELLED,
+            ),
+            {
+                "drain_total": 1,
+                "drain_cancelled_total": 1,
+            },
+        ),
+        (
+            _finished_event(
+                TcpStreamDrainMetricEvent(),
+                TcpStreamDrainResult.TLS_FAILED,
+            ),
+            {
+                "drain_total": 1,
+                "drain_tls_error_total": 1,
+            },
+        ),
+    ],
+)
+def test_a5_operation_attempts_metric_counts_io_and_drain_events(
+    event: MetricEvent,
+    expected_changed: dict[str, int],
+) -> None:
+    metric = TcpStreamOperationAttemptsMetric()
+
+    changed = metric.handle_event(event)
+
+    expected = _zero_dimensions(metric)
+    expected.update(expected_changed)
+
+    assert changed is True
+    assert _dimensions(metric) == expected
+
+
+def test_a6_operation_attempts_metric_ignores_unrelated_event() -> None:
+    metric = TcpStreamOperationAttemptsMetric()
+
+    changed = metric.handle_event(_UnrelatedMetricEvent())
+
+    assert changed is False
+    assert _dimensions(metric) == _zero_dimensions(metric)
+
+
+@pytest.mark.parametrize(
+    ("event", "total_dimension"),
+    [
+        (
+            _finished_event(
+                TcpStreamOpenMetricEvent(use_ssl=False),
+                _UnknownMetricResult.UNKNOWN,
+            ),
+            "open_total",
+        ),
+        (
+            _finished_event(
+                TcpStreamCloseMetricEvent(),
+                _UnknownMetricResult.UNKNOWN,
+            ),
+            "close_total",
+        ),
+        (
+            _finished_event(
+                TcpStreamStartTlsMetricEvent(),
+                _UnknownMetricResult.UNKNOWN,
+            ),
+            "start_tls_total",
+        ),
+        (
+            _finished_event(
+                TcpStreamCryptoCodecAttachMetricEvent(),
+                _UnknownMetricResult.UNKNOWN,
+            ),
+            "crypto_codec_attach_total",
+        ),
+        (
+            _finished_event(
+                TcpStreamCryptoCodecDetachMetricEvent(),
+                _UnknownMetricResult.UNKNOWN,
+            ),
+            "crypto_codec_detach_total",
+        ),
+        (
+            _finished_event(
+                TcpStreamStreamReadMetricEvent(),
+                _UnknownMetricResult.UNKNOWN,
+            ),
+            "stream_read_total",
+        ),
+        (
+            _finished_event(
+                TcpStreamStreamWriteMetricEvent(),
+                _UnknownMetricResult.UNKNOWN,
+            ),
+            "stream_write_total",
+        ),
+        (
+            _finished_event(
+                TcpStreamDrainMetricEvent(),
+                _UnknownMetricResult.UNKNOWN,
+            ),
+            "drain_total",
+        ),
+    ],
+)
+def test_a7_operation_attempts_metric_counts_total_but_ignores_unknown_result_bucket(
+    event: MetricEvent,
+    total_dimension: str,
+) -> None:
+    metric = TcpStreamOperationAttemptsMetric()
+
+    changed = metric.handle_event(event)
+
+    expected = _zero_dimensions(metric)
+    expected[total_dimension] = 1
+
+    assert changed is True
+    assert _dimensions(metric) == expected
+
+
+# -------------------------
+# Group b: operation latency metric
+# -------------------------
+
+
+def test_b1_operation_latency_metric_has_expected_identity_and_initial_snapshot() -> None:
+    metric = TcpStreamOperationLatencyMetric()
+
+    assert metric.metric_name == "tcp_stream.operation.latency"
+    assert _dimensions(metric) == {
+        "open_success_latency_average_ns": 0,
+        "open_success_latency_max_ns": 0,
+        "close_success_latency_average_ns": 0,
+        "close_success_latency_max_ns": 0,
+        "start_tls_success_latency_average_ns": 0,
+        "start_tls_success_latency_max_ns": 0,
+        "crypto_codec_attach_success_latency_average_ns": 0,
+        "crypto_codec_attach_success_latency_max_ns": 0,
+        "crypto_codec_detach_success_latency_average_ns": 0,
+        "crypto_codec_detach_success_latency_max_ns": 0,
+        "stream_read_success_latency_average_ns": 0,
+        "stream_read_success_latency_max_ns": 0,
+        "stream_write_success_latency_average_ns": 0,
+        "stream_write_success_latency_max_ns": 0,
+        "drain_success_latency_average_ns": 0,
+        "drain_success_latency_max_ns": 0,
+    }
+
+
+@pytest.mark.parametrize(
+    ("event_one", "event_two", "average_dimension", "max_dimension"),
+    [
+        (
+            _finished_event(
+                TcpStreamOpenMetricEvent(use_ssl=False),
+                TcpStreamOpenResult.SUCCEEDED,
+                duration_ns=10,
+            ),
+            _finished_event(
+                TcpStreamOpenMetricEvent(use_ssl=False),
+                TcpStreamOpenResult.SUCCEEDED,
+                duration_ns=30,
+            ),
+            "open_success_latency_average_ns",
+            "open_success_latency_max_ns",
+        ),
+        (
+            _finished_event(
+                TcpStreamCloseMetricEvent(),
+                TcpStreamCloseResult.SUCCEEDED,
+                duration_ns=10,
+            ),
+            _finished_event(
+                TcpStreamCloseMetricEvent(),
+                TcpStreamCloseResult.SUCCEEDED,
+                duration_ns=30,
+            ),
+            "close_success_latency_average_ns",
+            "close_success_latency_max_ns",
+        ),
+        (
+            _finished_event(
+                TcpStreamStartTlsMetricEvent(),
+                TcpStreamStartTlsResult.SUCCEEDED,
+                duration_ns=10,
+            ),
+            _finished_event(
+                TcpStreamStartTlsMetricEvent(),
+                TcpStreamStartTlsResult.SUCCEEDED,
+                duration_ns=30,
+            ),
+            "start_tls_success_latency_average_ns",
+            "start_tls_success_latency_max_ns",
+        ),
+        (
+            _finished_event(
+                TcpStreamCryptoCodecAttachMetricEvent(),
+                TcpStreamCryptoCodecAttachResult.SUCCEEDED,
+                duration_ns=10,
+            ),
+            _finished_event(
+                TcpStreamCryptoCodecAttachMetricEvent(),
+                TcpStreamCryptoCodecAttachResult.SUCCEEDED,
+                duration_ns=30,
+            ),
+            "crypto_codec_attach_success_latency_average_ns",
+            "crypto_codec_attach_success_latency_max_ns",
+        ),
+        (
+            _finished_event(
+                TcpStreamCryptoCodecDetachMetricEvent(),
+                TcpStreamCryptoCodecDetachResult.SUCCEEDED,
+                duration_ns=10,
+            ),
+            _finished_event(
+                TcpStreamCryptoCodecDetachMetricEvent(),
+                TcpStreamCryptoCodecDetachResult.SUCCEEDED,
+                duration_ns=30,
+            ),
+            "crypto_codec_detach_success_latency_average_ns",
+            "crypto_codec_detach_success_latency_max_ns",
+        ),
+        (
+            _finished_event(
+                TcpStreamStreamReadMetricEvent(),
+                TcpStreamStreamReadResult.SUCCEEDED,
+                duration_ns=10,
+                bytes_count=1,
+            ),
+            _finished_event(
+                TcpStreamStreamReadMetricEvent(),
+                TcpStreamStreamReadResult.SUCCEEDED,
+                duration_ns=30,
+                bytes_count=1,
+            ),
+            "stream_read_success_latency_average_ns",
+            "stream_read_success_latency_max_ns",
+        ),
+        (
+            _finished_event(
+                TcpStreamStreamWriteMetricEvent(),
+                TcpStreamStreamWriteResult.SUCCEEDED,
+                duration_ns=10,
+                bytes_count=1,
+            ),
+            _finished_event(
+                TcpStreamStreamWriteMetricEvent(),
+                TcpStreamStreamWriteResult.SUCCEEDED,
+                duration_ns=30,
+                bytes_count=1,
+            ),
+            "stream_write_success_latency_average_ns",
+            "stream_write_success_latency_max_ns",
+        ),
+        (
+            _finished_event(
+                TcpStreamDrainMetricEvent(),
+                TcpStreamDrainResult.SUCCEEDED,
+                duration_ns=10,
+            ),
+            _finished_event(
+                TcpStreamDrainMetricEvent(),
+                TcpStreamDrainResult.SUCCEEDED,
+                duration_ns=30,
+            ),
+            "drain_success_latency_average_ns",
+            "drain_success_latency_max_ns",
+        ),
+    ],
+)
+def test_b2_operation_latency_metric_counts_success_average_and_max_per_operation(
+    event_one: MetricEvent,
+    event_two: MetricEvent,
+    average_dimension: str,
+    max_dimension: str,
+) -> None:
+    metric = TcpStreamOperationLatencyMetric()
+
+    assert metric.handle_event(event_one) is True
+    assert metric.handle_event(event_two) is True
+
+    dimensions = _dimensions(metric)
+
+    assert dimensions[average_dimension] == 20
+    assert dimensions[max_dimension] == 30
 
     for key, value in dimensions.items():
-        if key not in ("total", dimension):
+        if key not in (average_dimension, max_dimension):
             assert value == 0
 
 
+@pytest.mark.parametrize(
+    "event",
+    [
+        _finished_event(
+            TcpStreamOpenMetricEvent(use_ssl=False),
+            TcpStreamOpenResult.FAILED,
+        ),
+        _finished_event(
+            TcpStreamCloseMetricEvent(),
+            TcpStreamCloseResult.NOT_OPENED,
+        ),
+        _finished_event(
+            TcpStreamStartTlsMetricEvent(),
+            TcpStreamStartTlsResult.FAILED,
+        ),
+        _finished_event(
+            TcpStreamCryptoCodecAttachMetricEvent(),
+            TcpStreamCryptoCodecAttachResult.REFUSED_NOT_OPENED,
+        ),
+        _finished_event(
+            TcpStreamCryptoCodecDetachMetricEvent(),
+            TcpStreamCryptoCodecDetachResult.REFUSED_NOT_ATTACHED,
+        ),
+        _finished_event(
+            TcpStreamStreamReadMetricEvent(),
+            TcpStreamStreamReadResult.REMOTE_DISCONNECTED,
+        ),
+        _finished_event(
+            TcpStreamStreamWriteMetricEvent(),
+            TcpStreamStreamWriteResult.FAILED,
+        ),
+        _finished_event(
+            TcpStreamDrainMetricEvent(),
+            TcpStreamDrainResult.TIMED_OUT,
+        ),
+    ],
+)
+def test_b3_operation_latency_metric_ignores_non_success_events(event: MetricEvent) -> None:
+    metric = TcpStreamOperationLatencyMetric()
+
+    changed = metric.handle_event(event)
+
+    assert changed is False
+    assert _dimensions(metric) == _zero_dimensions(metric)
+
+
+def test_b4_operation_latency_metric_ignores_unrelated_event() -> None:
+    metric = TcpStreamOperationLatencyMetric()
+
+    changed = metric.handle_event(_UnrelatedMetricEvent())
+
+    assert changed is False
+    assert _dimensions(metric) == _zero_dimensions(metric)
+
+
 # -------------------------
-# Group a: open attempts metric
+# Group c: I/O bytes metric
 # -------------------------
 
 
-def test_a1_open_attempt_metric_has_expected_identity_and_initial_snapshot() -> None:
-    metric = TcpStreamOpenAttemptsMetric()
+def test_c1_io_bytes_metric_has_expected_identity_and_initial_snapshot() -> None:
+    metric = TcpStreamIoBytesMetric()
 
-    assert metric.metric_name == "tcp_stream.open.attempts"
-    assert metric.snapshot() == {
-        "name": "tcp_stream.open.attempts",
-        "dimensions": {
-            "total": 0,
-            "success_total": 0,
-            "already_opened_total": 0,
-            "failure_total": 0,
-            "cancelled_total": 0,
-        },
+    assert metric.metric_name == "tcp_stream.io.bytes"
+    assert _dimensions(metric) == {
+        "received_total": 0,
+        "sent_total": 0,
+        "read_success_bytes_average": 0,
+        "write_success_bytes_average": 0,
     }
 
 
-def test_a2_open_attempt_metric_event_has_expected_type_and_fields() -> None:
-    event = TcpStreamOpenAttemptMetricEvent(
-        use_ssl=True,
-        outcome=TcpStreamOpenAttemptOutcome.SUCCESS,
+def test_c2_io_bytes_metric_counts_received_and_sent_bytes() -> None:
+    metric = TcpStreamIoBytesMetric()
+
+    assert (
+        metric.handle_event(
+            _finished_event(
+                TcpStreamStreamReadMetricEvent(),
+                TcpStreamStreamReadResult.SUCCEEDED,
+                bytes_count=10,
+            )
+        )
+        is True
+    )
+    assert (
+        metric.handle_event(
+            _finished_event(
+                TcpStreamStreamReadMetricEvent(),
+                TcpStreamStreamReadResult.SUCCEEDED,
+                bytes_count=30,
+            )
+        )
+        is True
+    )
+    assert (
+        metric.handle_event(
+            _finished_event(
+                TcpStreamStreamWriteMetricEvent(),
+                TcpStreamStreamWriteResult.SUCCEEDED,
+                bytes_count=5,
+            )
+        )
+        is True
+    )
+    assert (
+        metric.handle_event(
+            _finished_event(
+                TcpStreamStreamWriteMetricEvent(),
+                TcpStreamStreamWriteResult.SUCCEEDED,
+                bytes_count=15,
+            )
+        )
+        is True
     )
 
-    assert event.event_type == "tcp_stream.open.attempt"
-    assert event.use_ssl is True
-    assert event.outcome is TcpStreamOpenAttemptOutcome.SUCCESS
+    assert _dimensions(metric) == {
+        "received_total": 40,
+        "sent_total": 20,
+        "read_success_bytes_average": 20,
+        "write_success_bytes_average": 10,
+    }
 
 
 @pytest.mark.parametrize(
-    ("outcome", "dimension"),
+    "event",
     [
-        (TcpStreamOpenAttemptOutcome.SUCCESS, "success_total"),
-        (TcpStreamOpenAttemptOutcome.ALREADY_OPENED, "already_opened_total"),
-        (TcpStreamOpenAttemptOutcome.FAILURE, "failure_total"),
-        (TcpStreamOpenAttemptOutcome.CANCELLED, "cancelled_total"),
+        _finished_event(
+            TcpStreamStreamReadMetricEvent(),
+            TcpStreamStreamReadResult.FAILED,
+            bytes_count=10,
+        ),
+        _finished_event(
+            TcpStreamStreamWriteMetricEvent(),
+            TcpStreamStreamWriteResult.FAILED,
+            bytes_count=10,
+        ),
+        _finished_event(
+            TcpStreamDrainMetricEvent(),
+            TcpStreamDrainResult.SUCCEEDED,
+        ),
     ],
 )
-def test_a3_open_attempt_metric_counts_each_outcome(
-    outcome: TcpStreamOpenAttemptOutcome,
-    dimension: str,
+def test_c3_io_bytes_metric_ignores_non_success_or_unrelated_events(
+    event: MetricEvent,
 ) -> None:
-    metric = TcpStreamOpenAttemptsMetric()
+    metric = TcpStreamIoBytesMetric()
 
-    changed = metric.handle_event(
-        TcpStreamOpenAttemptMetricEvent(
-            use_ssl=False,
-            outcome=outcome,
+    changed = metric.handle_event(event)
+
+    assert changed is False
+    assert _dimensions(metric) == {
+        "received_total": 0,
+        "sent_total": 0,
+        "read_success_bytes_average": 0,
+        "write_success_bytes_average": 0,
+    }
+
+
+# -------------------------
+# Group d: remote disconnect metric
+# -------------------------
+
+
+def test_d1_remote_disconnect_metric_has_expected_identity_and_initial_snapshot() -> None:
+    metric = TcpStreamRemoteDisconnectMetric()
+
+    assert metric.metric_name == "tcp_stream.remote_disconnect"
+    assert _dimensions(metric) == {
+        "total": 0,
+    }
+
+
+def test_d2_remote_disconnect_metric_counts_remote_disconnect_events() -> None:
+    metric = TcpStreamRemoteDisconnectMetric()
+
+    assert (
+        metric.handle_event(
+            _finished_event(
+                TcpStreamStreamReadMetricEvent(),
+                TcpStreamStreamReadResult.REMOTE_DISCONNECTED,
+                duration_ns=10,
+            )
         )
+        is True
     )
-
-    assert changed is True
-    _assert_single_dimension_incremented(
-        dimensions=_dimensions(metric),
-        dimension=dimension,
-    )
-
-
-def test_a4_open_attempt_metric_ignores_unrelated_event() -> None:
-    metric = TcpStreamOpenAttemptsMetric()
-
-    changed = metric.handle_event(
-        TcpStreamCloseAttemptMetricEvent(
-            outcome=TcpStreamCloseAttemptOutcome.SUCCESS,
+    assert (
+        metric.handle_event(
+            _finished_event(
+                TcpStreamStreamReadMetricEvent(),
+                TcpStreamStreamReadResult.REMOTE_DISCONNECTED,
+                duration_ns=20,
+            )
         )
+        is True
     )
+
+    assert _dimensions(metric) == {
+        "total": 2,
+    }
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        _finished_event(
+            TcpStreamStreamReadMetricEvent(),
+            TcpStreamStreamReadResult.SUCCEEDED,
+            bytes_count=1,
+        ),
+        _finished_event(
+            TcpStreamStreamWriteMetricEvent(),
+            TcpStreamStreamWriteResult.FAILED,
+        ),
+        _UnrelatedMetricEvent(),
+    ],
+)
+def test_d3_remote_disconnect_metric_ignores_other_events(event: MetricEvent) -> None:
+    metric = TcpStreamRemoteDisconnectMetric()
+
+    changed = metric.handle_event(event)
 
     assert changed is False
     assert _dimensions(metric) == {
         "total": 0,
-        "success_total": 0,
-        "already_opened_total": 0,
-        "failure_total": 0,
-        "cancelled_total": 0,
     }
 
 
-def test_a5_open_attempt_metric_accumulates_multiple_events() -> None:
-    metric = TcpStreamOpenAttemptsMetric()
+# -------------------------
+# Group e: abortive close metric
+# -------------------------
 
-    events = [
-        TcpStreamOpenAttemptMetricEvent(
-            use_ssl=False,
-            outcome=TcpStreamOpenAttemptOutcome.SUCCESS,
-        ),
-        TcpStreamOpenAttemptMetricEvent(
-            use_ssl=True,
-            outcome=TcpStreamOpenAttemptOutcome.SUCCESS,
-        ),
-        TcpStreamOpenAttemptMetricEvent(
-            use_ssl=False,
-            outcome=TcpStreamOpenAttemptOutcome.ALREADY_OPENED,
-        ),
-        TcpStreamOpenAttemptMetricEvent(
-            use_ssl=False,
-            outcome=TcpStreamOpenAttemptOutcome.FAILURE,
-        ),
-        TcpStreamOpenAttemptMetricEvent(
-            use_ssl=False,
-            outcome=TcpStreamOpenAttemptOutcome.CANCELLED,
-        ),
-    ]
 
-    for event in events:
-        assert metric.handle_event(event) is True
+def test_e1_abortive_close_metric_has_expected_identity_and_initial_snapshot() -> None:
+    metric = TcpStreamAbortiveCloseMetric()
 
+    assert metric.metric_name == "tcp_stream.abortive_close"
     assert _dimensions(metric) == {
-        "total": 5,
-        "success_total": 2,
-        "already_opened_total": 1,
-        "failure_total": 1,
-        "cancelled_total": 1,
+        "total": 0,
     }
-
-
-# -------------------------
-# Group b: close attempts metric
-# -------------------------
-
-
-def test_b1_close_attempt_metric_has_expected_identity_and_initial_snapshot() -> None:
-    metric = TcpStreamCloseAttemptsMetric()
-
-    assert metric.metric_name == "tcp_stream.close.attempts"
-    assert metric.snapshot() == {
-        "name": "tcp_stream.close.attempts",
-        "dimensions": {
-            "total": 0,
-            "success_total": 0,
-            "not_opened_total": 0,
-            "failure_total": 0,
-            "cancelled_total": 0,
-        },
-    }
-
-
-def test_b2_close_attempt_metric_event_has_expected_type_and_fields() -> None:
-    event = TcpStreamCloseAttemptMetricEvent(
-        outcome=TcpStreamCloseAttemptOutcome.NOT_OPENED,
-    )
-
-    assert event.event_type == "tcp_stream.close.attempt"
-    assert event.outcome is TcpStreamCloseAttemptOutcome.NOT_OPENED
 
 
 @pytest.mark.parametrize(
-    ("outcome", "dimension"),
+    "event",
     [
-        (TcpStreamCloseAttemptOutcome.SUCCESS, "success_total"),
-        (TcpStreamCloseAttemptOutcome.NOT_OPENED, "not_opened_total"),
-        (TcpStreamCloseAttemptOutcome.FAILURE, "failure_total"),
-        (TcpStreamCloseAttemptOutcome.CANCELLED, "cancelled_total"),
+        _finished_event(
+            TcpStreamStartTlsMetricEvent(),
+            TcpStreamStartTlsResult.FAILED,
+        ),
+        _finished_event(
+            TcpStreamStartTlsMetricEvent(),
+            TcpStreamStartTlsResult.TIMED_OUT,
+        ),
+        _finished_event(
+            TcpStreamStartTlsMetricEvent(),
+            TcpStreamStartTlsResult.TLS_FAILED,
+        ),
+        _finished_event(
+            TcpStreamStreamReadMetricEvent(),
+            TcpStreamStreamReadResult.FAILED,
+        ),
+        _finished_event(
+            TcpStreamStreamReadMetricEvent(),
+            TcpStreamStreamReadResult.TLS_FAILED,
+        ),
+        _finished_event(
+            TcpStreamStreamReadMetricEvent(),
+            TcpStreamStreamReadResult.REMOTE_DISCONNECTED,
+        ),
+        _finished_event(
+            TcpStreamDrainMetricEvent(),
+            TcpStreamDrainResult.FAILED,
+        ),
+        _finished_event(
+            TcpStreamDrainMetricEvent(),
+            TcpStreamDrainResult.TLS_FAILED,
+        ),
     ],
 )
-def test_b3_close_attempt_metric_counts_each_outcome(
-    outcome: TcpStreamCloseAttemptOutcome,
-    dimension: str,
-) -> None:
-    metric = TcpStreamCloseAttemptsMetric()
+def test_e2_abortive_close_metric_counts_abortive_events(event: MetricEvent) -> None:
+    metric = TcpStreamAbortiveCloseMetric()
 
-    changed = metric.handle_event(TcpStreamCloseAttemptMetricEvent(outcome=outcome))
+    changed = metric.handle_event(event)
 
     assert changed is True
-    _assert_single_dimension_incremented(
-        dimensions=_dimensions(metric),
-        dimension=dimension,
-    )
+    assert _dimensions(metric) == {
+        "total": 1,
+    }
 
 
-def test_b4_close_attempt_metric_ignores_unrelated_event() -> None:
-    metric = TcpStreamCloseAttemptsMetric()
+@pytest.mark.parametrize(
+    "event",
+    [
+        _finished_event(
+            TcpStreamOpenMetricEvent(use_ssl=False),
+            TcpStreamOpenResult.SUCCEEDED,
+        ),
+        _finished_event(
+            TcpStreamCloseMetricEvent(),
+            TcpStreamCloseResult.SUCCEEDED,
+        ),
+        _finished_event(
+            TcpStreamStartTlsMetricEvent(),
+            TcpStreamStartTlsResult.SUCCEEDED,
+        ),
+        _finished_event(
+            TcpStreamStreamReadMetricEvent(),
+            TcpStreamStreamReadResult.SUCCEEDED,
+            bytes_count=1,
+        ),
+        _finished_event(
+            TcpStreamStreamWriteMetricEvent(),
+            TcpStreamStreamWriteResult.FAILED,
+        ),
+        _finished_event(
+            TcpStreamDrainMetricEvent(),
+            TcpStreamDrainResult.SUCCEEDED,
+        ),
+        _UnrelatedMetricEvent(),
+    ],
+)
+def test_e3_abortive_close_metric_ignores_non_abortive_events(event: MetricEvent) -> None:
+    metric = TcpStreamAbortiveCloseMetric()
 
-    changed = metric.handle_event(
-        TcpStreamOpenAttemptMetricEvent(
-            use_ssl=False,
-            outcome=TcpStreamOpenAttemptOutcome.SUCCESS,
-        )
-    )
+    changed = metric.handle_event(event)
 
     assert changed is False
     assert _dimensions(metric) == {
         "total": 0,
-        "success_total": 0,
-        "not_opened_total": 0,
-        "failure_total": 0,
-        "cancelled_total": 0,
-    }
-
-
-def test_b5_close_attempt_metric_accumulates_multiple_events() -> None:
-    metric = TcpStreamCloseAttemptsMetric()
-
-    events = [
-        TcpStreamCloseAttemptMetricEvent(
-            outcome=TcpStreamCloseAttemptOutcome.SUCCESS,
-        ),
-        TcpStreamCloseAttemptMetricEvent(
-            outcome=TcpStreamCloseAttemptOutcome.NOT_OPENED,
-        ),
-        TcpStreamCloseAttemptMetricEvent(
-            outcome=TcpStreamCloseAttemptOutcome.NOT_OPENED,
-        ),
-        TcpStreamCloseAttemptMetricEvent(
-            outcome=TcpStreamCloseAttemptOutcome.FAILURE,
-        ),
-        TcpStreamCloseAttemptMetricEvent(
-            outcome=TcpStreamCloseAttemptOutcome.CANCELLED,
-        ),
-    ]
-
-    for event in events:
-        assert metric.handle_event(event) is True
-
-    assert _dimensions(metric) == {
-        "total": 5,
-        "success_total": 1,
-        "not_opened_total": 2,
-        "failure_total": 1,
-        "cancelled_total": 1,
-    }
-
-
-# -------------------------
-# Group c: start_tls attempts metric
-# -------------------------
-
-
-def test_c1_start_tls_attempt_metric_has_expected_identity_and_initial_snapshot() -> None:
-    metric = TcpStreamStartTlsAttemptsMetric()
-
-    assert metric.metric_name == "tcp_stream.start_tls.attempts"
-    assert metric.snapshot() == {
-        "name": "tcp_stream.start_tls.attempts",
-        "dimensions": {
-            "total": 0,
-            "success_total": 0,
-            "failure_total": 0,
-            "cancelled_total": 0,
-            "timeout_total": 0,
-            "refused_not_opened_total": 0,
-            "refused_already_under_ssl_total": 0,
-            "refused_start_tls_already_active_total": 0,
-            "refused_crypto_codec_attached_total": 0,
-            "tls_error_total": 0,
-        },
-    }
-
-
-def test_c2_start_tls_attempt_metric_event_has_expected_type_and_fields() -> None:
-    event = TcpStreamStartTlsAttemptMetricEvent(
-        outcome=TcpStreamStartTlsAttemptOutcome.TLS_ERROR,
-    )
-
-    assert event.event_type == "tcp_stream.start_tls.attempt"
-    assert event.outcome is TcpStreamStartTlsAttemptOutcome.TLS_ERROR
-
-
-@pytest.mark.parametrize(
-    ("outcome", "dimension"),
-    [
-        (TcpStreamStartTlsAttemptOutcome.SUCCESS, "success_total"),
-        (TcpStreamStartTlsAttemptOutcome.FAILURE, "failure_total"),
-        (TcpStreamStartTlsAttemptOutcome.CANCELLED, "cancelled_total"),
-        (TcpStreamStartTlsAttemptOutcome.TIMEOUT, "timeout_total"),
-        (
-            TcpStreamStartTlsAttemptOutcome.REFUSED_NOT_OPENED,
-            "refused_not_opened_total",
-        ),
-        (
-            TcpStreamStartTlsAttemptOutcome.REFUSED_ALREADY_UNDER_SSL,
-            "refused_already_under_ssl_total",
-        ),
-        (
-            TcpStreamStartTlsAttemptOutcome.REFUSED_START_TLS_ALREADY_ACTIVE,
-            "refused_start_tls_already_active_total",
-        ),
-        (
-            TcpStreamStartTlsAttemptOutcome.REFUSED_CRYPTO_CODEC_ATTACHED,
-            "refused_crypto_codec_attached_total",
-        ),
-        (TcpStreamStartTlsAttemptOutcome.TLS_ERROR, "tls_error_total"),
-    ],
-)
-def test_c3_start_tls_attempt_metric_counts_each_outcome(
-    outcome: TcpStreamStartTlsAttemptOutcome,
-    dimension: str,
-) -> None:
-    metric = TcpStreamStartTlsAttemptsMetric()
-
-    changed = metric.handle_event(TcpStreamStartTlsAttemptMetricEvent(outcome=outcome))
-
-    assert changed is True
-    _assert_single_dimension_incremented(
-        dimensions=_dimensions(metric),
-        dimension=dimension,
-    )
-
-
-def test_c4_start_tls_attempt_metric_ignores_unrelated_event() -> None:
-    metric = TcpStreamStartTlsAttemptsMetric()
-
-    changed = metric.handle_event(
-        TcpStreamCloseAttemptMetricEvent(
-            outcome=TcpStreamCloseAttemptOutcome.SUCCESS,
-        )
-    )
-
-    assert changed is False
-    assert _dimensions(metric) == {
-        "total": 0,
-        "success_total": 0,
-        "failure_total": 0,
-        "cancelled_total": 0,
-        "timeout_total": 0,
-        "refused_not_opened_total": 0,
-        "refused_already_under_ssl_total": 0,
-        "refused_start_tls_already_active_total": 0,
-        "refused_crypto_codec_attached_total": 0,
-        "tls_error_total": 0,
-    }
-
-
-def test_c5_start_tls_attempt_metric_accumulates_multiple_events() -> None:
-    metric = TcpStreamStartTlsAttemptsMetric()
-
-    events = [
-        TcpStreamStartTlsAttemptMetricEvent(
-            outcome=TcpStreamStartTlsAttemptOutcome.SUCCESS,
-        ),
-        TcpStreamStartTlsAttemptMetricEvent(
-            outcome=TcpStreamStartTlsAttemptOutcome.FAILURE,
-        ),
-        TcpStreamStartTlsAttemptMetricEvent(
-            outcome=TcpStreamStartTlsAttemptOutcome.CANCELLED,
-        ),
-        TcpStreamStartTlsAttemptMetricEvent(
-            outcome=TcpStreamStartTlsAttemptOutcome.TIMEOUT,
-        ),
-        TcpStreamStartTlsAttemptMetricEvent(
-            outcome=TcpStreamStartTlsAttemptOutcome.REFUSED_NOT_OPENED,
-        ),
-        TcpStreamStartTlsAttemptMetricEvent(
-            outcome=TcpStreamStartTlsAttemptOutcome.REFUSED_ALREADY_UNDER_SSL,
-        ),
-        TcpStreamStartTlsAttemptMetricEvent(
-            outcome=TcpStreamStartTlsAttemptOutcome.REFUSED_START_TLS_ALREADY_ACTIVE,
-        ),
-        TcpStreamStartTlsAttemptMetricEvent(
-            outcome=TcpStreamStartTlsAttemptOutcome.REFUSED_CRYPTO_CODEC_ATTACHED,
-        ),
-        TcpStreamStartTlsAttemptMetricEvent(
-            outcome=TcpStreamStartTlsAttemptOutcome.TLS_ERROR,
-        ),
-    ]
-
-    for event in events:
-        assert metric.handle_event(event) is True
-
-    assert _dimensions(metric) == {
-        "total": 9,
-        "success_total": 1,
-        "failure_total": 1,
-        "cancelled_total": 1,
-        "timeout_total": 1,
-        "refused_not_opened_total": 1,
-        "refused_already_under_ssl_total": 1,
-        "refused_start_tls_already_active_total": 1,
-        "refused_crypto_codec_attached_total": 1,
-        "tls_error_total": 1,
-    }
-
-
-# -------------------------
-# Group d: crypto codec attach attempts metric
-# -------------------------
-
-
-def test_d1_crypto_codec_attach_attempt_metric_has_expected_identity_and_initial_snapshot() -> None:
-    metric = TcpStreamCryptoCodecAttachAttemptsMetric()
-
-    assert metric.metric_name == "tcp_stream.crypto_codec.attach.attempts"
-    assert metric.snapshot() == {
-        "name": "tcp_stream.crypto_codec.attach.attempts",
-        "dimensions": {
-            "total": 0,
-            "success_total": 0,
-            "failure_total": 0,
-            "refused_not_opened_total": 0,
-            "refused_already_under_ssl_total": 0,
-            "refused_start_tls_active_total": 0,
-            "refused_already_attached_total": 0,
-        },
-    }
-
-
-def test_d2_crypto_codec_attach_attempt_metric_event_has_expected_type_and_fields() -> None:
-    event = TcpStreamCryptoCodecAttachAttemptMetricEvent(
-        outcome=TcpStreamCryptoCodecAttachAttemptOutcome.REFUSED_ALREADY_ATTACHED,
-    )
-
-    assert event.event_type == "tcp_stream.crypto_codec.attach.attempt"
-    assert event.outcome is TcpStreamCryptoCodecAttachAttemptOutcome.REFUSED_ALREADY_ATTACHED
-
-
-@pytest.mark.parametrize(
-    ("outcome", "dimension"),
-    [
-        (TcpStreamCryptoCodecAttachAttemptOutcome.SUCCESS, "success_total"),
-        (TcpStreamCryptoCodecAttachAttemptOutcome.FAILURE, "failure_total"),
-        (
-            TcpStreamCryptoCodecAttachAttemptOutcome.REFUSED_NOT_OPENED,
-            "refused_not_opened_total",
-        ),
-        (
-            TcpStreamCryptoCodecAttachAttemptOutcome.REFUSED_ALREADY_UNDER_SSL,
-            "refused_already_under_ssl_total",
-        ),
-        (
-            TcpStreamCryptoCodecAttachAttemptOutcome.REFUSED_START_TLS_ACTIVE,
-            "refused_start_tls_active_total",
-        ),
-        (
-            TcpStreamCryptoCodecAttachAttemptOutcome.REFUSED_ALREADY_ATTACHED,
-            "refused_already_attached_total",
-        ),
-    ],
-)
-def test_d3_crypto_codec_attach_attempt_metric_counts_each_outcome(
-    outcome: TcpStreamCryptoCodecAttachAttemptOutcome,
-    dimension: str,
-) -> None:
-    metric = TcpStreamCryptoCodecAttachAttemptsMetric()
-
-    changed = metric.handle_event(TcpStreamCryptoCodecAttachAttemptMetricEvent(outcome=outcome))
-
-    assert changed is True
-    _assert_single_dimension_incremented(
-        dimensions=_dimensions(metric),
-        dimension=dimension,
-    )
-
-
-def test_d4_crypto_codec_attach_attempt_metric_ignores_unrelated_event() -> None:
-    metric = TcpStreamCryptoCodecAttachAttemptsMetric()
-
-    changed = metric.handle_event(
-        TcpStreamCryptoCodecDetachAttemptMetricEvent(
-            outcome=TcpStreamCryptoCodecDetachAttemptOutcome.SUCCESS,
-        )
-    )
-
-    assert changed is False
-    assert _dimensions(metric) == {
-        "total": 0,
-        "success_total": 0,
-        "failure_total": 0,
-        "refused_not_opened_total": 0,
-        "refused_already_under_ssl_total": 0,
-        "refused_start_tls_active_total": 0,
-        "refused_already_attached_total": 0,
-    }
-
-
-def test_d5_crypto_codec_attach_attempt_metric_accumulates_multiple_events() -> None:
-    metric = TcpStreamCryptoCodecAttachAttemptsMetric()
-
-    events = [
-        TcpStreamCryptoCodecAttachAttemptMetricEvent(
-            outcome=TcpStreamCryptoCodecAttachAttemptOutcome.SUCCESS,
-        ),
-        TcpStreamCryptoCodecAttachAttemptMetricEvent(
-            outcome=TcpStreamCryptoCodecAttachAttemptOutcome.FAILURE,
-        ),
-        TcpStreamCryptoCodecAttachAttemptMetricEvent(
-            outcome=TcpStreamCryptoCodecAttachAttemptOutcome.REFUSED_NOT_OPENED,
-        ),
-        TcpStreamCryptoCodecAttachAttemptMetricEvent(
-            outcome=TcpStreamCryptoCodecAttachAttemptOutcome.REFUSED_ALREADY_UNDER_SSL,
-        ),
-        TcpStreamCryptoCodecAttachAttemptMetricEvent(
-            outcome=TcpStreamCryptoCodecAttachAttemptOutcome.REFUSED_START_TLS_ACTIVE,
-        ),
-        TcpStreamCryptoCodecAttachAttemptMetricEvent(
-            outcome=TcpStreamCryptoCodecAttachAttemptOutcome.REFUSED_ALREADY_ATTACHED,
-        ),
-    ]
-
-    for event in events:
-        assert metric.handle_event(event) is True
-
-    assert _dimensions(metric) == {
-        "total": 6,
-        "success_total": 1,
-        "failure_total": 1,
-        "refused_not_opened_total": 1,
-        "refused_already_under_ssl_total": 1,
-        "refused_start_tls_active_total": 1,
-        "refused_already_attached_total": 1,
-    }
-
-
-# -------------------------
-# Group e: crypto codec detach attempts metric
-# -------------------------
-
-
-def test_e1_crypto_codec_detach_attempt_metric_has_expected_identity_and_initial_snapshot() -> None:
-    metric = TcpStreamCryptoCodecDetachAttemptsMetric()
-
-    assert metric.metric_name == "tcp_stream.crypto_codec.detach.attempts"
-    assert metric.snapshot() == {
-        "name": "tcp_stream.crypto_codec.detach.attempts",
-        "dimensions": {
-            "total": 0,
-            "success_total": 0,
-            "failure_total": 0,
-            "refused_not_opened_total": 0,
-            "refused_not_attached_total": 0,
-        },
-    }
-
-
-def test_e2_crypto_codec_detach_attempt_metric_event_has_expected_type_and_fields() -> None:
-    event = TcpStreamCryptoCodecDetachAttemptMetricEvent(
-        outcome=TcpStreamCryptoCodecDetachAttemptOutcome.REFUSED_NOT_ATTACHED,
-    )
-
-    assert event.event_type == "tcp_stream.crypto_codec.detach.attempt"
-    assert event.outcome is TcpStreamCryptoCodecDetachAttemptOutcome.REFUSED_NOT_ATTACHED
-
-
-@pytest.mark.parametrize(
-    ("outcome", "dimension"),
-    [
-        (TcpStreamCryptoCodecDetachAttemptOutcome.SUCCESS, "success_total"),
-        (TcpStreamCryptoCodecDetachAttemptOutcome.FAILURE, "failure_total"),
-        (
-            TcpStreamCryptoCodecDetachAttemptOutcome.REFUSED_NOT_OPENED,
-            "refused_not_opened_total",
-        ),
-        (
-            TcpStreamCryptoCodecDetachAttemptOutcome.REFUSED_NOT_ATTACHED,
-            "refused_not_attached_total",
-        ),
-    ],
-)
-def test_e3_crypto_codec_detach_attempt_metric_counts_each_outcome(
-    outcome: TcpStreamCryptoCodecDetachAttemptOutcome,
-    dimension: str,
-) -> None:
-    metric = TcpStreamCryptoCodecDetachAttemptsMetric()
-
-    changed = metric.handle_event(TcpStreamCryptoCodecDetachAttemptMetricEvent(outcome=outcome))
-
-    assert changed is True
-    _assert_single_dimension_incremented(
-        dimensions=_dimensions(metric),
-        dimension=dimension,
-    )
-
-
-def test_e4_crypto_codec_detach_attempt_metric_ignores_unrelated_event() -> None:
-    metric = TcpStreamCryptoCodecDetachAttemptsMetric()
-
-    changed = metric.handle_event(
-        TcpStreamCryptoCodecAttachAttemptMetricEvent(
-            outcome=TcpStreamCryptoCodecAttachAttemptOutcome.SUCCESS,
-        )
-    )
-
-    assert changed is False
-    assert _dimensions(metric) == {
-        "total": 0,
-        "success_total": 0,
-        "failure_total": 0,
-        "refused_not_opened_total": 0,
-        "refused_not_attached_total": 0,
-    }
-
-
-def test_e5_crypto_codec_detach_attempt_metric_accumulates_multiple_events() -> None:
-    metric = TcpStreamCryptoCodecDetachAttemptsMetric()
-
-    events = [
-        TcpStreamCryptoCodecDetachAttemptMetricEvent(
-            outcome=TcpStreamCryptoCodecDetachAttemptOutcome.SUCCESS,
-        ),
-        TcpStreamCryptoCodecDetachAttemptMetricEvent(
-            outcome=TcpStreamCryptoCodecDetachAttemptOutcome.FAILURE,
-        ),
-        TcpStreamCryptoCodecDetachAttemptMetricEvent(
-            outcome=TcpStreamCryptoCodecDetachAttemptOutcome.REFUSED_NOT_OPENED,
-        ),
-        TcpStreamCryptoCodecDetachAttemptMetricEvent(
-            outcome=TcpStreamCryptoCodecDetachAttemptOutcome.REFUSED_NOT_ATTACHED,
-        ),
-    ]
-
-    for event in events:
-        assert metric.handle_event(event) is True
-
-    assert _dimensions(metric) == {
-        "total": 4,
-        "success_total": 1,
-        "failure_total": 1,
-        "refused_not_opened_total": 1,
-        "refused_not_attached_total": 1,
     }
 
 
@@ -705,531 +1282,15 @@ def test_e5_crypto_codec_detach_attempt_metric_accumulates_multiple_events() -> 
 # -------------------------
 
 
-def test_f1_each_metric_ignores_all_other_metric_event_types() -> None:
-    metrics_and_unrelated_events = [
-        (
-            TcpStreamOpenAttemptsMetric(),
-            TcpStreamCloseAttemptMetricEvent(
-                outcome=TcpStreamCloseAttemptOutcome.SUCCESS,
-            ),
-        ),
-        (
-            TcpStreamCloseAttemptsMetric(),
-            TcpStreamStartTlsAttemptMetricEvent(
-                outcome=TcpStreamStartTlsAttemptOutcome.SUCCESS,
-            ),
-        ),
-        (
-            TcpStreamStartTlsAttemptsMetric(),
-            TcpStreamCryptoCodecAttachAttemptMetricEvent(
-                outcome=TcpStreamCryptoCodecAttachAttemptOutcome.SUCCESS,
-            ),
-        ),
-        (
-            TcpStreamCryptoCodecAttachAttemptsMetric(),
-            TcpStreamCryptoCodecDetachAttemptMetricEvent(
-                outcome=TcpStreamCryptoCodecDetachAttemptOutcome.SUCCESS,
-            ),
-        ),
-        (
-            TcpStreamCryptoCodecDetachAttemptsMetric(),
-            TcpStreamOpenAttemptMetricEvent(
-                use_ssl=False,
-                outcome=TcpStreamOpenAttemptOutcome.SUCCESS,
-            ),
-        ),
+def test_f1_each_metric_ignores_unrelated_event() -> None:
+    metrics = [
+        TcpStreamOperationAttemptsMetric(),
+        TcpStreamOperationLatencyMetric(),
+        TcpStreamIoBytesMetric(),
+        TcpStreamRemoteDisconnectMetric(),
+        TcpStreamAbortiveCloseMetric(),
     ]
 
-    for metric, event in metrics_and_unrelated_events:
-        assert metric.handle_event(event) is False
-        assert _dimensions(metric)["total"] == 0
-
-
-# -------------------------
-# Group f: stream read attempts metric
-# -------------------------
-
-
-def test_f1_stream_read_attempt_metric_has_expected_identity_and_initial_snapshot() -> None:
-    metric = TcpStreamStreamReadAttemptsMetric()
-
-    assert metric.metric_name == "tcp_stream.stream_read.attempts"
-    assert metric.snapshot() == {
-        "name": "tcp_stream.stream_read.attempts",
-        "dimensions": {
-            "total": 0,
-            "success_total": 0,
-            "timeout_total": 0,
-            "error_total": 0,
-            "cancelled_total": 0,
-            "tls_error_total": 0,
-        },
-    }
-
-
-def test_f2_stream_read_attempt_metric_event_has_expected_type_and_fields() -> None:
-    event = TcpStreamStreamReadAttemptMetricEvent(
-        outcome=TcpStreamStreamReadAttemptOutcome.SUCCESS,
-    )
-
-    assert event.event_type == "tcp_stream.stream_read.attempt"
-    assert event.outcome is TcpStreamStreamReadAttemptOutcome.SUCCESS
-
-
-@pytest.mark.parametrize(
-    ("outcome", "dimension"),
-    [
-        (TcpStreamStreamReadAttemptOutcome.SUCCESS, "success_total"),
-        (TcpStreamStreamReadAttemptOutcome.TIMEOUT, "timeout_total"),
-        (TcpStreamStreamReadAttemptOutcome.ERROR, "error_total"),
-        (TcpStreamStreamReadAttemptOutcome.CANCELLED, "cancelled_total"),
-        (TcpStreamStreamReadAttemptOutcome.TLS_ERROR, "tls_error_total"),
-    ],
-)
-def test_f3_stream_read_attempt_metric_counts_each_outcome(
-    outcome: TcpStreamStreamReadAttemptOutcome,
-    dimension: str,
-) -> None:
-    metric = TcpStreamStreamReadAttemptsMetric()
-
-    changed = metric.handle_event(TcpStreamStreamReadAttemptMetricEvent(outcome=outcome))
-
-    assert changed is True
-    _assert_single_dimension_incremented(
-        dimensions=_dimensions(metric),
-        dimension=dimension,
-    )
-
-
-def test_f4_stream_read_attempt_metric_ignores_unrelated_event() -> None:
-    metric = TcpStreamStreamReadAttemptsMetric()
-
-    changed = metric.handle_event(
-        TcpStreamDrainAttemptMetricEvent(outcome=TcpStreamDrainAttemptOutcome.SUCCESS)
-    )
-
-    assert changed is False
-    assert _dimensions(metric) == {
-        "total": 0,
-        "success_total": 0,
-        "timeout_total": 0,
-        "error_total": 0,
-        "cancelled_total": 0,
-        "tls_error_total": 0,
-    }
-
-
-def test_f5_stream_read_attempt_metric_accumulates_multiple_events() -> None:
-    metric = TcpStreamStreamReadAttemptsMetric()
-
-    events = [
-        TcpStreamStreamReadAttemptMetricEvent(
-            outcome=TcpStreamStreamReadAttemptOutcome.SUCCESS,
-        ),
-        TcpStreamStreamReadAttemptMetricEvent(
-            outcome=TcpStreamStreamReadAttemptOutcome.TIMEOUT,
-        ),
-        TcpStreamStreamReadAttemptMetricEvent(
-            outcome=TcpStreamStreamReadAttemptOutcome.ERROR,
-        ),
-        TcpStreamStreamReadAttemptMetricEvent(
-            outcome=TcpStreamStreamReadAttemptOutcome.CANCELLED,
-        ),
-        TcpStreamStreamReadAttemptMetricEvent(
-            outcome=TcpStreamStreamReadAttemptOutcome.TLS_ERROR,
-        ),
-    ]
-
-    for event in events:
-        assert metric.handle_event(event) is True
-
-    assert _dimensions(metric) == {
-        "total": 5,
-        "success_total": 1,
-        "timeout_total": 1,
-        "error_total": 1,
-        "cancelled_total": 1,
-        "tls_error_total": 1,
-    }
-
-
-# -------------------------
-# Group g: stream write attempts metric
-# -------------------------
-
-
-def test_g1_stream_write_attempt_metric_has_expected_identity_and_initial_snapshot() -> None:
-    metric = TcpStreamStreamWriteAttemptsMetric()
-
-    assert metric.metric_name == "tcp_stream.stream_write.attempts"
-    assert metric.snapshot() == {
-        "name": "tcp_stream.stream_write.attempts",
-        "dimensions": {
-            "total": 0,
-            "success_total": 0,
-            "error_total": 0,
-            "tls_error_total": 0,
-        },
-    }
-
-
-def test_g2_stream_write_attempt_metric_event_has_expected_type_and_fields() -> None:
-    event = TcpStreamStreamWriteAttemptMetricEvent(
-        outcome=TcpStreamStreamWriteAttemptOutcome.TLS_ERROR,
-    )
-
-    assert event.event_type == "tcp_stream.stream_write.attempt"
-    assert event.outcome is TcpStreamStreamWriteAttemptOutcome.TLS_ERROR
-
-
-@pytest.mark.parametrize(
-    ("outcome", "dimension"),
-    [
-        (TcpStreamStreamWriteAttemptOutcome.SUCCESS, "success_total"),
-        (TcpStreamStreamWriteAttemptOutcome.ERROR, "error_total"),
-        (TcpStreamStreamWriteAttemptOutcome.TLS_ERROR, "tls_error_total"),
-    ],
-)
-def test_g3_stream_write_attempt_metric_counts_each_outcome(
-    outcome: TcpStreamStreamWriteAttemptOutcome,
-    dimension: str,
-) -> None:
-    metric = TcpStreamStreamWriteAttemptsMetric()
-
-    changed = metric.handle_event(TcpStreamStreamWriteAttemptMetricEvent(outcome=outcome))
-
-    assert changed is True
-    _assert_single_dimension_incremented(
-        dimensions=_dimensions(metric),
-        dimension=dimension,
-    )
-
-
-def test_g4_stream_write_attempt_metric_ignores_unrelated_event() -> None:
-    metric = TcpStreamStreamWriteAttemptsMetric()
-
-    changed = metric.handle_event(
-        TcpStreamStreamReadAttemptMetricEvent(
-            outcome=TcpStreamStreamReadAttemptOutcome.SUCCESS,
-        )
-    )
-
-    assert changed is False
-    assert _dimensions(metric) == {
-        "total": 0,
-        "success_total": 0,
-        "error_total": 0,
-        "tls_error_total": 0,
-    }
-
-
-def test_g5_stream_write_attempt_metric_accumulates_multiple_events() -> None:
-    metric = TcpStreamStreamWriteAttemptsMetric()
-
-    events = [
-        TcpStreamStreamWriteAttemptMetricEvent(
-            outcome=TcpStreamStreamWriteAttemptOutcome.SUCCESS,
-        ),
-        TcpStreamStreamWriteAttemptMetricEvent(
-            outcome=TcpStreamStreamWriteAttemptOutcome.SUCCESS,
-        ),
-        TcpStreamStreamWriteAttemptMetricEvent(
-            outcome=TcpStreamStreamWriteAttemptOutcome.ERROR,
-        ),
-        TcpStreamStreamWriteAttemptMetricEvent(
-            outcome=TcpStreamStreamWriteAttemptOutcome.TLS_ERROR,
-        ),
-    ]
-
-    for event in events:
-        assert metric.handle_event(event) is True
-
-    assert _dimensions(metric) == {
-        "total": 4,
-        "success_total": 2,
-        "error_total": 1,
-        "tls_error_total": 1,
-    }
-
-
-# -------------------------
-# Group h: drain attempts metric
-# -------------------------
-
-
-def test_h1_drain_attempt_metric_has_expected_identity_and_initial_snapshot() -> None:
-    metric = TcpStreamDrainAttemptsMetric()
-
-    assert metric.metric_name == "tcp_stream.drain.attempts"
-    assert metric.snapshot() == {
-        "name": "tcp_stream.drain.attempts",
-        "dimensions": {
-            "total": 0,
-            "success_total": 0,
-            "timeout_total": 0,
-            "error_total": 0,
-            "cancelled_total": 0,
-            "tls_error_total": 0,
-        },
-    }
-
-
-def test_h2_drain_attempt_metric_event_has_expected_type_and_fields() -> None:
-    event = TcpStreamDrainAttemptMetricEvent(
-        outcome=TcpStreamDrainAttemptOutcome.CANCELLED,
-    )
-
-    assert event.event_type == "tcp_stream.drain.attempt"
-    assert event.outcome is TcpStreamDrainAttemptOutcome.CANCELLED
-
-
-@pytest.mark.parametrize(
-    ("outcome", "dimension"),
-    [
-        (TcpStreamDrainAttemptOutcome.SUCCESS, "success_total"),
-        (TcpStreamDrainAttemptOutcome.TIMEOUT, "timeout_total"),
-        (TcpStreamDrainAttemptOutcome.ERROR, "error_total"),
-        (TcpStreamDrainAttemptOutcome.CANCELLED, "cancelled_total"),
-        (TcpStreamDrainAttemptOutcome.TLS_ERROR, "tls_error_total"),
-    ],
-)
-def test_h3_drain_attempt_metric_counts_each_outcome(
-    outcome: TcpStreamDrainAttemptOutcome,
-    dimension: str,
-) -> None:
-    metric = TcpStreamDrainAttemptsMetric()
-
-    changed = metric.handle_event(TcpStreamDrainAttemptMetricEvent(outcome=outcome))
-
-    assert changed is True
-    _assert_single_dimension_incremented(
-        dimensions=_dimensions(metric),
-        dimension=dimension,
-    )
-
-
-def test_h4_drain_attempt_metric_ignores_unrelated_event() -> None:
-    metric = TcpStreamDrainAttemptsMetric()
-
-    changed = metric.handle_event(
-        TcpStreamStreamWriteAttemptMetricEvent(
-            outcome=TcpStreamStreamWriteAttemptOutcome.SUCCESS,
-        )
-    )
-
-    assert changed is False
-    assert _dimensions(metric) == {
-        "total": 0,
-        "success_total": 0,
-        "timeout_total": 0,
-        "error_total": 0,
-        "cancelled_total": 0,
-        "tls_error_total": 0,
-    }
-
-
-def test_h5_drain_attempt_metric_accumulates_multiple_events() -> None:
-    metric = TcpStreamDrainAttemptsMetric()
-
-    events = [
-        TcpStreamDrainAttemptMetricEvent(outcome=TcpStreamDrainAttemptOutcome.SUCCESS),
-        TcpStreamDrainAttemptMetricEvent(outcome=TcpStreamDrainAttemptOutcome.TIMEOUT),
-        TcpStreamDrainAttemptMetricEvent(outcome=TcpStreamDrainAttemptOutcome.ERROR),
-        TcpStreamDrainAttemptMetricEvent(outcome=TcpStreamDrainAttemptOutcome.CANCELLED),
-        TcpStreamDrainAttemptMetricEvent(outcome=TcpStreamDrainAttemptOutcome.TLS_ERROR),
-    ]
-
-    for event in events:
-        assert metric.handle_event(event) is True
-
-    assert _dimensions(metric) == {
-        "total": 5,
-        "success_total": 1,
-        "timeout_total": 1,
-        "error_total": 1,
-        "cancelled_total": 1,
-        "tls_error_total": 1,
-    }
-
-
-# -------------------------
-# Group i: bytes received metric
-# -------------------------
-
-
-def test_i1_bytes_received_metric_has_expected_identity_and_initial_snapshot() -> None:
-    metric = TcpStreamBytesReceivedMetric()
-
-    assert metric.metric_name == "tcp_stream.bytes.received"
-    assert metric.snapshot() == {
-        "name": "tcp_stream.bytes.received",
-        "dimensions": {
-            "total": 0,
-        },
-    }
-
-
-def test_i2_bytes_received_metric_event_has_expected_type_and_fields() -> None:
-    event = TcpStreamBytesReceivedMetricEvent(size=12)
-
-    assert event.event_type == "tcp_stream.bytes.received"
-    assert event.size == 12
-
-
-def test_i3_bytes_received_metric_accumulates_sizes() -> None:
-    metric = TcpStreamBytesReceivedMetric()
-
-    assert metric.handle_event(TcpStreamBytesReceivedMetricEvent(size=12)) is True
-    assert metric.handle_event(TcpStreamBytesReceivedMetricEvent(size=8)) is True
-
-    assert _dimensions(metric) == {
-        "total": 20,
-    }
-
-
-def test_i4_bytes_received_metric_ignores_unrelated_event() -> None:
-    metric = TcpStreamBytesReceivedMetric()
-
-    changed = metric.handle_event(TcpStreamBytesSentMetricEvent(size=10))
-
-    assert changed is False
-    assert _dimensions(metric) == {
-        "total": 0,
-    }
-
-
-# -------------------------
-# Group j: bytes sent metric
-# -------------------------
-
-
-def test_j1_bytes_sent_metric_has_expected_identity_and_initial_snapshot() -> None:
-    metric = TcpStreamBytesSentMetric()
-
-    assert metric.metric_name == "tcp_stream.bytes.sent"
-    assert metric.snapshot() == {
-        "name": "tcp_stream.bytes.sent",
-        "dimensions": {
-            "total": 0,
-        },
-    }
-
-
-def test_j2_bytes_sent_metric_event_has_expected_type_and_fields() -> None:
-    event = TcpStreamBytesSentMetricEvent(size=15)
-
-    assert event.event_type == "tcp_stream.bytes.sent"
-    assert event.size == 15
-
-
-def test_j3_bytes_sent_metric_accumulates_sizes() -> None:
-    metric = TcpStreamBytesSentMetric()
-
-    assert metric.handle_event(TcpStreamBytesSentMetricEvent(size=15)) is True
-    assert metric.handle_event(TcpStreamBytesSentMetricEvent(size=5)) is True
-
-    assert _dimensions(metric) == {
-        "total": 20,
-    }
-
-
-def test_j4_bytes_sent_metric_ignores_unrelated_event() -> None:
-    metric = TcpStreamBytesSentMetric()
-
-    changed = metric.handle_event(TcpStreamBytesReceivedMetricEvent(size=10))
-
-    assert changed is False
-    assert _dimensions(metric) == {
-        "total": 0,
-    }
-
-
-# -------------------------
-# Group k: remote disconnect metric
-# -------------------------
-
-
-def test_k1_remote_disconnect_metric_has_expected_identity_and_initial_snapshot() -> None:
-    metric = TcpStreamRemoteDisconnectMetric()
-
-    assert metric.metric_name == "tcp_stream.remote_disconnect"
-    assert metric.snapshot() == {
-        "name": "tcp_stream.remote_disconnect",
-        "dimensions": {
-            "total": 0,
-        },
-    }
-
-
-def test_k2_remote_disconnect_metric_event_has_expected_type() -> None:
-    event = TcpStreamRemoteDisconnectMetricEvent()
-
-    assert event.event_type == "tcp_stream.remote_disconnect"
-
-
-def test_k3_remote_disconnect_metric_counts_events() -> None:
-    metric = TcpStreamRemoteDisconnectMetric()
-
-    assert metric.handle_event(TcpStreamRemoteDisconnectMetricEvent()) is True
-    assert metric.handle_event(TcpStreamRemoteDisconnectMetricEvent()) is True
-
-    assert _dimensions(metric) == {
-        "total": 2,
-    }
-
-
-def test_k4_remote_disconnect_metric_ignores_unrelated_event() -> None:
-    metric = TcpStreamRemoteDisconnectMetric()
-
-    changed = metric.handle_event(TcpStreamAbortiveCloseMetricEvent())
-
-    assert changed is False
-    assert _dimensions(metric) == {
-        "total": 0,
-    }
-
-
-# -------------------------
-# Group l: abortive close metric
-# -------------------------
-
-
-def test_l1_abortive_close_metric_has_expected_identity_and_initial_snapshot() -> None:
-    metric = TcpStreamAbortiveCloseMetric()
-
-    assert metric.metric_name == "tcp_stream.abortive_close"
-    assert metric.snapshot() == {
-        "name": "tcp_stream.abortive_close",
-        "dimensions": {
-            "total": 0,
-        },
-    }
-
-
-def test_l2_abortive_close_metric_event_has_expected_type() -> None:
-    event = TcpStreamAbortiveCloseMetricEvent()
-
-    assert event.event_type == "tcp_stream.abortive_close"
-
-
-def test_l3_abortive_close_metric_counts_events() -> None:
-    metric = TcpStreamAbortiveCloseMetric()
-
-    assert metric.handle_event(TcpStreamAbortiveCloseMetricEvent()) is True
-    assert metric.handle_event(TcpStreamAbortiveCloseMetricEvent()) is True
-    assert metric.handle_event(TcpStreamAbortiveCloseMetricEvent()) is True
-
-    assert _dimensions(metric) == {
-        "total": 3,
-    }
-
-
-def test_l4_abortive_close_metric_ignores_unrelated_event() -> None:
-    metric = TcpStreamAbortiveCloseMetric()
-
-    changed = metric.handle_event(TcpStreamRemoteDisconnectMetricEvent())
-
-    assert changed is False
-    assert _dimensions(metric) == {
-        "total": 0,
-    }
+    for metric in metrics:
+        assert metric.handle_event(_UnrelatedMetricEvent()) is False
+        assert _dimensions(metric) == _zero_dimensions(metric)

@@ -39,7 +39,7 @@ from mvx.networking.engines.tcp_stream_engine.logging_policy import (
     tcp_stream_engine_event_policy,
     tcp_stream_engine_event_policy_config,
 )
-from mvx.networking.helpers.pattern_event_policy import (
+from mvx.common.logger.pattern_event_policy import (
     PatternLogEventPolicyAction,
     PatternLogEventPolicyConfig,
 )
