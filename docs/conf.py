@@ -11,6 +11,11 @@ _MVX_COMMON_PROJECT = tomllib.loads(_MVX_COMMON_PYPROJECT.read_text(encoding="ut
     "project"
 ]
 
+_MVX_NETWORKING_PYPROJECT = _REPO_ROOT / "networking" / "pyproject.toml"
+_MVX_NETWORKING_PROJECT = tomllib.loads(
+    _MVX_NETWORKING_PYPROJECT.read_text(encoding="utf-8")
+)["project"]
+
 myst_enable_extensions = [
     "substitution",
 ]
@@ -18,6 +23,8 @@ myst_enable_extensions = [
 myst_substitutions = {
     "mvx_common_package": _MVX_COMMON_PROJECT["name"],
     "mvx_common_version": _MVX_COMMON_PROJECT["version"],
+    "mvx_networking_package": _MVX_NETWORKING_PROJECT["name"],
+    "mvx_networking_version": _MVX_NETWORKING_PROJECT["version"],
 }
 
 extensions = [
